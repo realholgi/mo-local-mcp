@@ -1,0 +1,40 @@
+[project]
+name = "mo-local-mcp"
+version = "0.1.0"
+description = "Ausschließlich lesender MCP-Zugriff auf feste MonKey-Office-Datenbankstände"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.13"
+dependencies = [
+  "apsw==3.54.1.0",
+  "cryptography>=48,<49",
+  "mcp==1.30.0",
+]
+
+[project.urls]
+Quellcode = "https://github.com/realholgi/mo-local-mcp"
+Dokumentation = "https://github.com/realholgi/mo-local-mcp#readme"
+Fehlerberichte = "https://github.com/realholgi/mo-local-mcp/issues"
+
+[project.scripts]
+mo-local-mcp = "mo_local_mcp.server:main"
+mo-local-connect = "mo_local_mcp.connect:main"
+mo-schluessel-wiederherstellen = "mo_local_mcp.schluessel:main"
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+# Nur öffentliche Projektdateien in Quellpakete aufnehmen.
+[tool.hatch.build.targets.sdist]
+include = [
+  "/mo_local_mcp/*.py",
+  "/tests/*.py",
+  "/README.md",
+  "/LICENSE",
+  "/pyproject.toml",
+  "/uv.lock",
+  "/.gitignore",
+  "/.github/workflows/*.yml",
+]

@@ -1,0 +1,65 @@
+name: Tests und Paketbau
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: macOS · Python ${{ matrix.python }}
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.13", "3.14"]
+    steps:
+      - name: Quellcode auschecken
+        uses: actions/checkout@v4
+      - name: uv und Python einrichten
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Abhängigkeiten gemäß Lockdatei installieren
+        run: uv sync --locked
+      - name: Tests mit synthetischen Daten ausführen
+        run: uv run --no-sync python -m unittest discover -s tests -v
+
+  paketbau:
+    name: macOS · Veröffentlichungspakete
+    runs-on: macos-latest
+    needs: tests
+    steps:
+      - name: Quellcode auschecken
+        uses: actions/checkout@v4
+      - name: uv und Python einrichten
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+      - name: Quellpaket und daraus Wheel bauen
+        run: uv build
+      - name: Wheel in eigener Umgebung installieren und Einstiegspunkte prüfen
+        shell: bash
+        run: |
+          umgebung="$RUNNER_TEMP/mo-local-mcp-pakettest"
+          uv venv "$umgebung" --python 3.13
+          uv pip install --python "$umgebung/bin/python" dist/*.whl
+          "$umgebung/bin/mo-local-mcp" --hilfe
+          "$umgebung/bin/mo-local-connect" --hilfe
+          "$umgebung/bin/mo-schluessel-wiederherstellen" --hilfe
+      - name: Geprüfte Pakete als CI-Artefakte bereitstellen
+        uses: actions/upload-artifact@v4
+        with:
+          name: mo-local-mcp-pakete
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7

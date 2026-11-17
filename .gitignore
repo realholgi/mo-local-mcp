@@ -1,0 +1,34 @@
+# Python-Umgebung und erzeugte Paketdateien
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.mypy_cache/
+
+# Private Datenbanken, einschließlich beispiel.sdb, samt SQLite-Begleitdateien
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sdb
+*.sdb-*
+
+# Schlüssel, lokale Zugangsdaten und macOS-Metadaten
+*.key
+.env
+.env.*
+.omp/
+*.passwort
+*.password
+*.passwd
+*.secret
+passwort.txt
+password.txt
+credentials.json
+.DS_Store
+
+# Lokale Berichte mit möglichen Geschäftsdaten
+/berichte/
+/reports/
