@@ -8,7 +8,7 @@ license-files = ["LICENSE"]
 requires-python = ">=3.13"
 dependencies = [
   "apsw==3.54.1.0",
-  "cryptography>=48,<49",
+  "cryptography>=48,<51",
   "mcp==1.30.0",
 ]
 
