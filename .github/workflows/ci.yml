@@ -14,17 +14,17 @@ concurrency:
 
 jobs:
   tests:
-    name: macOS · Python ${{ matrix.python }}
-    runs-on: macos-latest
+    name: Linux · Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         python: ["3.13", "3.14"]
     steps:
       - name: Quellcode auschecken
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
       - name: uv und Python einrichten
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v10.3.3
         with:
           python-version: ${{ matrix.python }}
       - name: Abhängigkeiten gemäß Lockdatei installieren
@@ -38,9 +38,9 @@ jobs:
     needs: tests
     steps:
       - name: Quellcode auschecken
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
       - name: uv und Python einrichten
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v10.3.3
         with:
           python-version: "3.13"
       - name: Quellpaket und daraus Wheel bauen
@@ -55,7 +55,7 @@ jobs:
           "$umgebung/bin/mo-local-connect" --hilfe
           "$umgebung/bin/mo-schluessel-wiederherstellen" --hilfe
       - name: Geprüfte Pakete als CI-Artefakte bereitstellen
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: mo-local-mcp-pakete
           path: |

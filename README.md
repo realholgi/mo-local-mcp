@@ -475,8 +475,9 @@ es wurden keine WAL-, Journal- oder SHM-Dateien angelegt.
 ### GitHub Actions
 
 Der Workflow `.github/workflows/ci.yml` startet bei Push, Pull Request oder manuell.
-Er führt die Tests nur auf macOS mit Python 3.13 und 3.14 aus.
-Nach erfolgreichen Tests baut er das Quellpaket und daraus das Wheel.
+Die Tests laufen unter Linux (`ubuntu-latest`) mit Python 3.13 und 3.14.
+Nach erfolgreichen Tests baut ein macOS-Job das Quellpaket und daraus das Wheel.
+Dieser Job verwendet den ARM64-Runner `macos-latest`.
 Er installiert das Wheel in einer eigenen Umgebung und prüft alle drei CLI-Einstiegspunkte mit `--hilfe`.
 Die Pakete bleiben sieben Tage als CI-Artefakte verfügbar.
 Der Workflow veröffentlicht keine Pakete auf PyPI.
