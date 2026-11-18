@@ -78,9 +78,10 @@ Starte danach den MCP-Client neu. Für eine Rückkehr installiere das Wheel der 
 Das Kommando `mo-schluessel-wiederherstellen` ist auch im Wheel enthalten.
 
 Die Profiltabelle `PROFILE` in `mo_local_mcp/schluessel.py` enthält die erfassten Programmversionen.
-Aktuell ist MonKey Office 2026, Programmversion 23.2.4, eingetragen.
+Erfasst sind MonKey Office 2026 in den Programmversionen 23.0.2, 23.1.0 und 23.2.4.
+Zusätzlich ist MonKey Office 2025 in Programmversion 22.4.0 erfasst.
 Der SHA-256 der Programmdatei bestimmt das Profil. Unbekannte Dateien werden abgelehnt.
-Ohne `--programmdatei` sucht das Kommando vom letzten Profil rückwärts nach einer vorhandenen Installation.
+Ohne `--programmdatei` verwendet das Kommando `/Applications/MonKey Office 2026.app/Contents/MacOS/MonKey Office 2026`.
 Es liest die Programmdatei und speichert den Schlüssel. Es führt keinen Anwendungscode aus.
 Der Schlüssel erscheint nicht in der Ausgabe. Herstellerprogrammdateien werden nicht verteilt.
 
@@ -97,6 +98,22 @@ uv run mo-local-mcp --datenbank /absoluter/pfad/entwicklungsstand.db \
   --schluesseldatei /privater/pfad/datenbank.key
 ```
 
+Archivierte Apps an einem anderen Ort benötigen den Pfad zur ausführbaren Datei:
+
+```sh
+uv run mo-schluessel-wiederherstellen \
+  --programmdatei "/pfad/zum/archiv/MonKey Office 2026 23.0.2.app/Contents/MacOS/MonKey Office 2026"
+```
+
+Für 23.1.0 gilt derselbe Aufruf mit dem passenden App-Pfad.
+Für MonKey Office 2025 lautet der Pfad innerhalb der App `Contents/MacOS/MonKey Office 2025`.
+Für Archive und andere Ablageorte ist `--programmdatei` erforderlich.
+Auch eine unterstützte ältere Version am Standardpfad wird über ihren Hash erkannt.
+Der Dateiname allein bestimmt die Version nicht. Entscheidend ist der SHA-256 der ausführbaren Datei.
+Die vier erfassten Programmdateien liefern denselben 32-Byte-Standardschlüssel.
+Die Ableitung wurde für die Archivversionen über das CLI geprüft, ohne die Apps zu starten.
+Die Prüfung speicherte keine Schlüsselwerte in Dokumentation oder Testdaten.
+
 #### Neue Programmversionen
 
 Für eine neue Version mit gleichem Ableitungsverfahren ergänze einen Eintrag am Ende von `PROFILE`.
@@ -106,7 +123,6 @@ Bestehende Profile bleiben erhalten. Die Reihenfolge der Einträge geht von alt 
 |---|---|
 | Tabellenschlüssel | SHA-256 der genauen Programmdatei |
 | `version` | Versionsbezeichnung für Fehlermeldungen |
-| `programmdatei` | Standardpfad zur installierten Programmdatei |
 | `konstanten_offset` | Beginn der Konstantentabelle relativ zu diesem Mach-O-Teil |
 | `eintrag_groesse` | Abstand zwischen den Tabelleneinträgen in Bytes |
 | `zeiger_offset` | Position des Zeichenkettenzeigers innerhalb eines Eintrags |

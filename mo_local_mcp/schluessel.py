@@ -15,6 +15,7 @@ import os
 import struct
 
 
+STANDARD_PROGRAMMDATEI = Path("/Applications/MonKey Office 2026.app/Contents/MacOS/MonKey Office 2026")
 CPU_TYPE_ARM64 = 0x100000C
 SCHLUESSELLAENGE = 32
 MH_MAGIC_64 = 0xFEEDFACF
@@ -31,7 +32,6 @@ ZEIGER_64 = struct.Struct("<Q")
 @dataclass(frozen=True)
 class Schluesselprofil:
     version: str
-    programmdatei: Path
     konstanten_offset: int
     eintrag_groesse: int
     zeiger_offset: int
@@ -40,9 +40,38 @@ class Schluesselprofil:
 
 
 PROFILE = {
+    "fdb7e8328ea808ab40e5dde0e8d77e7efc9098d0157bdd96f530709e2f76ae2e": Schluesselprofil(
+        version="2025 22.4.0",
+        konstanten_offset=0x88DC810,
+        eintrag_groesse=40,
+        zeiger_offset=8,
+        zeichen_marker=1,
+        zeichenindizes=(17, 8, 1, 25, 14, 12, 3, 15, 0, 2, 3, 27, 13, 8, 6,
+                       10, 4, 21, 12, 20, 4, 18, 17, 7, 26, 11, 16, 21, 18,
+                       19, 28, 5, 16, 24, 1, 15, 17, 12, 23, 22, 5, 11, 16, 9),
+    ),
+    "6a77b42e15182aa936672eaa575b3b19cb42f28ddf1089d879ad89dc64311175": Schluesselprofil(
+        version="2026 23.0.2",
+        konstanten_offset=0x8A105B0,
+        eintrag_groesse=40,
+        zeiger_offset=8,
+        zeichen_marker=1,
+        zeichenindizes=(17, 8, 1, 25, 14, 12, 3, 15, 0, 2, 3, 27, 13, 8, 6,
+                       10, 4, 21, 12, 20, 4, 18, 17, 7, 26, 11, 16, 21, 18,
+                       19, 28, 5, 16, 24, 1, 15, 17, 12, 23, 22, 5, 11, 16, 9),
+    ),
+    "685a6a61b4a948538e53aac1a02beb7a39ba9dbd1afef7a6384fc41ebc877b02": Schluesselprofil(
+        version="2026 23.1.0",
+        konstanten_offset=0x8AD1C38,
+        eintrag_groesse=40,
+        zeiger_offset=8,
+        zeichen_marker=1,
+        zeichenindizes=(17, 8, 1, 25, 14, 12, 3, 15, 0, 2, 3, 27, 13, 8, 6,
+                       10, 4, 21, 12, 20, 4, 18, 17, 7, 26, 11, 16, 21, 18,
+                       19, 28, 5, 16, 24, 1, 15, 17, 12, 23, 22, 5, 11, 16, 9),
+    ),
     "5fa4249c6d7635546139f51bf5f3e7c20b9a230fcc0fbf27e7d8c8d0e90ba9b5": Schluesselprofil(
         version="2026 23.2.4",
-        programmdatei=Path("/Applications/MonKey Office 2026.app/Contents/MacOS/MonKey Office 2026"),
         konstanten_offset=0x8F957C0,
         eintrag_groesse=40,
         zeiger_offset=8,
@@ -126,16 +155,12 @@ def schluessel_wiederherstellen(programmdatei):
 def main():
     """Wählt die Programmdatei und speichert den Schlüssel mit Dateirechten 0600, ohne vorhandene Dateien zu überschreiben."""
     parser = DeutscherArgumentParser(description=__doc__)
-    parser.add_argument("--programmdatei", type=Path, help="Pfad zur Programmdatei; ohne Angabe die neueste erfasste Installation verwenden")
+    parser.add_argument("--programmdatei", type=Path, default=STANDARD_PROGRAMMDATEI,
+                        help=f"Pfad zur Programmdatei; Standard: {STANDARD_PROGRAMMDATEI}")
     parser.add_argument("--ausgabe", type=Path, default=Path.home() / "Library/Application Support/mo-local-mcp/database.key", help="Zielpfad der privaten Schlüsseldatei")
     argumente = parser.parse_args()
-    if argumente.programmdatei is None:
-        argumente.programmdatei = next(
-            (profil.programmdatei for profil in reversed(PROFILE.values()) if profil.programmdatei.is_file()),
-            None,
-        )
-        if argumente.programmdatei is None:
-            parser.error("Keine erfasste Installation gefunden; --programmdatei angeben")
+    if not argumente.programmdatei.is_file():
+        parser.error(f"Programmdatei nicht gefunden: {argumente.programmdatei}; --programmdatei angeben")
     schluessel = schluessel_wiederherstellen(argumente.programmdatei)
     argumente.ausgabe.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     try:
