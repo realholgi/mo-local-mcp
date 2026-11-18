@@ -16,11 +16,11 @@ Du benötigst macOS, Python ab 3.13 und [uv](https://docs.astral.sh/uv/).
 **Verwende nur einen geschlossenen, ruhenden und konsistenten Datenbankstand, keine aktive MonKey-Datei.**
 Die `beispiel.sdb` dient nur der Entwicklung.
 
-Installiere das fertige Paket aus [Release v1.0.0](https://github.com/realholgi/mo-local-mcp/releases/tag/v1.0.0). Ein Git-Checkout ist nicht nötig:
+Installiere das fertige Paket aus [Release v1.1.0](https://github.com/realholgi/mo-local-mcp/releases/tag/v1.1.0). Ein Git-Checkout ist nicht nötig:
 
 ```sh
 uv tool install --python 3.13 \
-  "https://github.com/realholgi/mo-local-mcp/releases/download/v1.0.0/mo_local_mcp-1.0.0-py3-none-any.whl"
+  "https://github.com/realholgi/mo-local-mcp/releases/download/v1.1.0/mo_local_mcp-1.1.0-py3-none-any.whl"
 mo-schluessel-wiederherstellen
 mo-local-mcp --datenbank /absoluter/pfad/entwicklungsstand.db
 ```

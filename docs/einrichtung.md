@@ -37,9 +37,9 @@ Es gibt keine automatische Veröffentlichung auf PyPI.
 Lade das Wheel und `SHA256SUMS` aus demselben Release in einen eigenen Ordner.
 
 ```sh
-shasum -a 256 mo_local_mcp-1.0.0-py3-none-any.whl
+shasum -a 256 mo_local_mcp-1.1.0-py3-none-any.whl
 cat SHA256SUMS
-uv tool install --python 3.13 ./mo_local_mcp-1.0.0-py3-none-any.whl
+uv tool install --python 3.13 ./mo_local_mcp-1.1.0-py3-none-any.whl
 mo-local-mcp --hilfe
 ```
 
