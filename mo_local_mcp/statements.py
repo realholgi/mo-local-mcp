@@ -132,6 +132,88 @@ class StatementReader:
             ],
         }
 
+    def trial_balance(self, company_id, year, account_from=None, account_to=None, limit=100, offset=0):
+        _integer(company_id, "firma_id")
+        _integer(year, "jahr")
+        _integer(limit, "anzahl")
+        _integer(offset, "versatz", 0)
+        if year > 9999 or limit > 500:
+            raise ValueError("jahr darf höchstens 9999 und anzahl höchstens 500 sein")
+        for value, name in ((account_from, "konto_von"), (account_to, "konto_bis")):
+            if value is not None:
+                _integer(value, name, 0)
+        if account_from is not None and account_to is not None and account_from > account_to:
+            raise ValueError("konto_von darf konto_bis nicht überschreiten")
+        period = self._fiscal_year(company_id, year)
+        effective_account = "CASE WHEN j.SammelKonto>0 THEN j.SammelKonto ELSE j.Konto END"
+        journal_filter = ""
+        definition_filter = ""
+        bounds = []
+        for value, operator in ((account_from, ">="), (account_to, "<=")):
+            if value is not None:
+                journal_filter += f" AND ({effective_account}){operator}?"
+                definition_filter += f" AND Nummer{operator}?"
+                bounds.append(value)
+        groups = self._rows(
+            f"SELECT {effective_account} AS account, "
+            "sum(CASE WHEN b.Art=2 THEN coalesce(j.BetragSoll,0) ELSE 0 END) AS opening_debit, "
+            "sum(CASE WHEN b.Art=2 THEN coalesce(j.BetragHaben,0) ELSE 0 END) AS opening_credit, "
+            "sum(CASE WHEN b.Art=2 THEN 0 ELSE coalesce(j.BetragSoll,0) END) AS movement_debit, "
+            "sum(CASE WHEN b.Art=2 THEN 0 ELSE coalesce(j.BetragHaben,0) END) AS movement_credit "
+            "FROM JOURNAL j JOIN BUCHUNG b ON b._rowid=j.Buchung_id AND b.Firma_id=j.Firma_id "
+            "WHERE b.Firma_id=? AND b.Wj_id=? AND b.Datum>=? AND b.Datum<=?"
+            + journal_filter + " GROUP BY account ORDER BY account",
+            [company_id, period["_rowid"], period["Von"], period["Bis"], *bounds],
+        )
+        definitions = defaultdict(list)
+        for definition in self._rows(
+            "SELECT Nummer, Bezeichnung FROM KONTO WHERE Firma_id=?" + definition_filter + " ORDER BY Nummer",
+            [company_id, *bounds],
+        ):
+            definitions[definition["Nummer"]].append(definition["Bezeichnung"])
+
+        def amounts(opening_debit, opening_credit, movement_debit, movement_credit):
+            opening_balance = opening_debit - opening_credit
+            return {
+                "opening": {
+                    "debit": _money(opening_debit), "credit": _money(opening_credit),
+                    "balance": _money(opening_balance),
+                },
+                "turnovers": {"debit": _money(movement_debit), "credit": _money(movement_credit)},
+                "closing_balance": _money(opening_balance + movement_debit - movement_credit),
+            }
+
+        totals = [ZERO, ZERO, ZERO, ZERO]
+        accounts = []
+        for index, group in enumerate(groups):
+            names = definitions[group["account"]]
+            if len(names) != 1:
+                raise ValueError("Genau eine Kontendefinition in dieser Firma erwartet")
+            values = [
+                Decimal(str(group[field]))
+                for field in ("opening_debit", "opening_credit", "movement_debit", "movement_credit")
+            ]
+            for field, value in enumerate(values):
+                totals[field] += value
+            if offset <= index < offset + limit:
+                balance = values[0] - values[1] + values[2] - values[3]
+                accounts.append({
+                    "account": group["account"], "name": names[0], **amounts(*values),
+                    "balance_side": "H" if balance < 0 else "S" if balance > 0 else "",
+                })
+        truncated = offset + len(accounts) < len(groups)
+        return {
+            "company_id": company_id, "fiscal_year": period, "currency": period["Waehrung"],
+            "money_unit": "Währungseinheiten als Dezimalzeichenketten; bereits durch 100 geteilt",
+            "accounts": accounts, "totals": amounts(*totals), "total_accounts": len(groups),
+            "truncated": truncated, "next_offset": offset + len(accounts) if truncated else None,
+            "basis": "Hauptbuchsicht des gesamten gespeicherten Wirtschaftsjahres einschließlich aller Statuswerte und vorzeichenbehafteter Stornos. "
+            "Personenbuchungen fließen ausschließlich in ihr gespeichertes positives Sammelkonto ein, jede Journalzeile genau einmal. "
+            "Eröffnungen mit Art=2 sind von den Umsätzen getrennt. Beträge stammen aus SW in der Währung des Wirtschaftsjahres, nicht aus FW. "
+            "Summen umfassen den vollständigen Kontenfilter vor der Seiteneinteilung; ein Filter muss nicht ausgeglichen sein. "
+            "name ist die gespeicherte Namensvorlage ohne Platzhalterauflösung.",
+        }
+
     def _layout(self, company_id, structure_id):
         structures = self._rows(
             "SELECT _rowid FROM KONTOSTRUKTUR WHERE Firma_id=? ORDER BY _rowid", [company_id]

@@ -15,6 +15,8 @@ def records(result):
 
 
 class BusinessTests(unittest.TestCase):
+    detail_updates: tuple[tuple[str, list], ...] = ()
+
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
@@ -83,6 +85,22 @@ class BusinessTests(unittest.TestCase):
             UPDATE AUFTRAGSPOSITION SET EinzelPreisNettoFW=123.45, GesamtPreisNettoFW=-1,
                 Menge=2.5, Rabatt=10 WHERE _rowid=6;
             UPDATE BUCHUNG SET Summe=765432.0, SummeFW=765432.0 WHERE _rowid=1;
+            ALTER TABLE ADRESSE ADD COLUMN SO_Bemerkung;
+            UPDATE ADRESSE SET SO_Bemerkung='Vollständige synthetische Notiz – Kunde und Lieferant' WHERE _rowid=10;
+            ALTER TABLE JOURNAL ADD COLUMN NummerLong;
+            ALTER TABLE JOURNAL ADD COLUMN Position;
+            ALTER TABLE JOURNAL ADD COLUMN Storno;
+            ALTER TABLE JOURNAL ADD COLUMN Steuersatz;
+            ALTER TABLE JOURNAL ADD COLUMN Notizen;
+            UPDATE JOURNAL SET NummerLong=10,Position=_rowid,Storno=0,Steuersatz='USt19';
+            INSERT INTO BUCHUNG VALUES
+                (4,1,'2027-07-01','SONDERFALL','Synthetischer Detailfall',0,0,'USD',-1234,-1500,99,'','Synthetische Notiz');
+            INSERT INTO JOURNAL VALUES
+                (10,1,4,8400,-1234,0,-1500,0,20,1,1,'-',NULL),
+                (11,1,4,1200,0,-1234,0,-1500,10,2,1,'',NULL),
+                (12,1,4,1776,NULL,0,NULL,0,10,1,0,NULL,NULL),
+                (13,1,4,1776,0,0,0,0,10,1,99,'Unbekannt',NULL),
+                (14,2,1,8400,99999,0,99999,0,1,1,0,'Fremd',NULL);
         """)
         connection.executescript("""
             CREATE TABLE KONTO (_rowid INTEGER PRIMARY KEY,Firma_id,Nummer,Bezeichnung,Typ,
@@ -107,6 +125,7 @@ class BusinessTests(unittest.TestCase):
                 (1,'Gesperrt19',1900,'Vollständige Warnung',1,1,0);
             ALTER TABLE BUCHUNG ADD COLUMN Wj_id;
             UPDATE BUCHUNG SET Wj_id=10;
+            UPDATE BUCHUNG SET Wj_id=0 WHERE _rowid=4;
             CREATE TABLE WIRTSCHAFTSJAHR (_rowid INTEGER PRIMARY KEY,Firma_id,Bezeichnung,Von,Bis,Waehrung,Gesperrt,
                 P01_Gesperrt DEFAULT 0,P02_Gesperrt DEFAULT 0,P03_Gesperrt DEFAULT 0,P04_Gesperrt DEFAULT 0,
                 P05_Gesperrt DEFAULT 0,P06_Gesperrt DEFAULT 0,P07_Gesperrt DEFAULT 0,P08_Gesperrt DEFAULT 0,
@@ -135,6 +154,10 @@ class BusinessTests(unittest.TestCase):
                 Kennzahlen,Berechnungsart,Verfahren,Meldung_id);
             CREATE TABLE ANLAGE (_rowid INTEGER PRIMARY KEY,Firma_id);
             CREATE TABLE ANLAGENPOSITION (_rowid INTEGER PRIMARY KEY,Firma_id,Anlage_id);
+            CREATE TABLE BESTELLUNG (_rowid INTEGER PRIMARY KEY,Firma_id);
+            CREATE TABLE BESTELLPOSITION (_rowid INTEGER PRIMARY KEY,Firma_id,Bestell_id);
+            CREATE TABLE ARTIKEL (_rowid INTEGER PRIMARY KEY,Firma_id);
+            CREATE TABLE PROJEKT (_rowid INTEGER PRIMARY KEY,Firma_id);
         """)
 
         def packed(values):
@@ -148,6 +171,8 @@ class BusinessTests(unittest.TestCase):
         ):
             connection.execute("UPDATE KONTO SET Kennzeichen=? WHERE _rowid=?",
                                (packed([packed(version) for version in versions]), row_id))
+        for sql, parameters in getattr(self, "detail_updates", ()):
+            connection.execute(sql, parameters)
         connection.commit()
         connection.close()
         plain = path.read_bytes()
@@ -197,7 +222,7 @@ class BusinessTests(unittest.TestCase):
         self.assertNotIn("api_fields",tables["KONTO"])
         self.assertEqual(tables["WIRTSCHAFTSJAHR"]["missing_documented_columns"],[])
         self.assertEqual(tables["STRUKTURPOSITION"]["enums"]["Struktur"]["B"],"Eingebundenes Jahresergebnis")
-        self.assertIn("Steuersatz",tables["JOURNAL"]["missing_documented_columns"])
+        self.assertNotIn("Steuersatz",tables["JOURNAL"]["missing_documented_columns"])
         self.assertIn("SD_InventarNr",tables["ANLAGE"]["missing_documented_columns"])
         self.assertIn("BuchwertNeu",tables["ANLAGENPOSITION"]["missing_documented_columns"])
 
@@ -296,6 +321,118 @@ class BusinessTests(unittest.TestCase):
         self.assertEqual([(r["Bezeichnung"],r["Art_label"]) for r in records(next_page["positions"])], [("Text","Textposition")])
         with self.assertRaisesRegex(ValueError,"nicht gefunden"):
             self.reader.sales_document(1,103)
+
+    def detail_reader(self, *updates):
+        fixture = BusinessTests(methodName="runTest")
+        fixture.detail_updates = updates
+        self.addCleanup(fixture.doCleanups)
+        fixture.setUp()
+        return fixture.reader
+
+    def test_address_detail_keeps_all_columns_and_unfiltered_roles(self):
+        result = self.reader.address(1,10)
+        self.assertEqual(set(result),{"address"})
+        address = records(result["address"])[0]
+        self.assertEqual((address["KF_Status"],address["LF_Status"]),(1,1))
+        self.assertEqual((address["KF_Status_label"],address["LF_Status_label"]),("Aktiv","Aktiv"))
+        self.assertEqual(address["SO_Bemerkung"],"Vollständige synthetische Notiz – Kunde und Lieferant")
+        self.assertNotIn("money",result["address"])
+        for address_id, label in ((11,"Inaktiv"),(12,"Gesperrt"),(13,"Kein Kunde/Lieferant")):
+            with self.subTest(address_id=address_id):
+                self.assertEqual(records(self.reader.address(1,address_id)["address"])[0]["KF_Status_label"],label)
+
+    def test_booking_detail_pages_only_company_scoped_journal(self):
+        first = self.reader.booking(1,1,journal_limit=1)
+        self.assertEqual(set(first),{"booking","journal_rows"})
+        header = records(first["booking"])[0]
+        self.assertEqual((header["Summe"],header["SummeFW"],header["Status"]),("7654.32","7654.32",3))
+        self.assertEqual(header["Bemerkung"],"")
+        self.assertNotIn("Status_label",header)
+        self.assertNotIn("next_offset",first["booking"])
+        self.assertEqual(records(first["journal_rows"])[0]["_rowid"],1)
+        self.assertEqual(first["journal_rows"]["next_offset"],1)
+        second = self.reader.booking(1,1,journal_limit=1,journal_offset=first["journal_rows"]["next_offset"])
+        self.assertEqual(first["booking"],second["booking"])
+        self.assertEqual([row["_rowid"] for row in records(second["journal_rows"])],[2])
+        self.assertIsNone(second["journal_rows"]["next_offset"])
+        empty = self.reader.booking(1,2)
+        self.assertEqual(records(empty["booking"])[0]["_rowid"],2)
+        self.assertEqual(empty["journal_rows"]["rows"],[])
+        self.assertFalse(empty["journal_rows"]["truncated"])
+        self.assertEqual(self.reader.booking(1,1,journal_offset=99)["journal_rows"]["rows"],[])
+
+    def test_booking_detail_preserves_signed_foreign_null_and_unknown_values(self):
+        result = self.reader.booking(1,4)
+        header = records(result["booking"])[0]
+        self.assertEqual((header["Waehrung"],header["Summe"],header["SummeFW"],header["Status"]),
+                         ("USD","-12.34","-15.00",99))
+        rows = records(result["journal_rows"])
+        self.assertEqual([row["_rowid"] for row in rows],[12,13,11,10])
+        self.assertEqual([row["Steuersatz"] for row in rows],[None,"Unbekannt","","-"])
+        self.assertEqual([row["Storno"] for row in rows],[0,99,1,1])
+        self.assertEqual((rows[-1]["BetragSoll"],rows[-1]["BetragSollFW"]),("-12.34","-15.00"))
+        self.assertEqual((rows[2]["BetragHaben"],rows[2]["BetragHabenFW"]),("-12.34","-15.00"))
+        self.assertIsNone(rows[0]["BetragSoll"])
+        self.assertIsNone(rows[0]["BetragSollFW"])
+        self.assertEqual(rows[1]["BetragSoll"],"0.00")
+        ids, offset = [], 0
+        while True:
+            page = self.reader.booking(1,4,journal_limit=1,journal_offset=offset)
+            self.assertEqual(page["booking"],result["booking"])
+            ids.extend(row["_rowid"] for row in records(page["journal_rows"]))
+            offset = page["journal_rows"]["next_offset"]
+            if offset is None:
+                break
+        self.assertEqual(ids,[12,13,11,10])
+
+    def test_detail_ids_reject_invalid_and_hide_other_companies(self):
+        for method, foreign_id, message in ((self.reader.address,15,"Adresse"),(self.reader.booking,3,"Buchung")):
+            for missing in (foreign_id,9999):
+                with self.subTest(method=message,missing=missing),self.assertRaisesRegex(ValueError,f"{message} in dieser Firma nicht gefunden"):
+                    method(1,missing)
+            for value in (0,-1,True,"1",1.5,None):
+                for company_id, detail_id in ((value,1),(1,value)):
+                    with self.subTest(method=message,company_id=company_id,detail_id=detail_id),self.assertRaises(ValueError):
+                        method(company_id,detail_id)
+        for arguments in ({"journal_limit":0},{"journal_limit":501},{"journal_limit":True},
+                          {"journal_limit":1.5},{"journal_offset":-1},{"journal_offset":True},
+                          {"journal_offset":"1"},{"journal_offset":1.5}):
+            with self.subTest(arguments=arguments),self.assertRaises(ValueError):
+                self.reader.booking(1,1,**arguments)
+
+    def test_detail_output_limits_distinguish_oversized_heads_and_journal(self):
+        long_text = "Ä" * 180000
+        cases = (
+            ("UPDATE ADRESSE SET SO_Bemerkung=? WHERE _rowid=10",10,"address","Adressdatensatz"),
+            ("UPDATE BUCHUNG SET Bemerkung=? WHERE _rowid=1",1,"booking","Buchungskopf"),
+            ("UPDATE JOURNAL SET Notizen=? WHERE _rowid=1",1,"booking","Buchungsjournalzeile"),
+        )
+        for sql, detail_id, method, message in cases:
+            with self.subTest(method=method,message=message):
+                reader = self.detail_reader((sql,[long_text]))
+                with self.assertRaisesRegex(ValueError,message + " überschreitet das Ausgabelimit; mit einer SQL-Abfrage weniger Spalten auswählen"):
+                    getattr(reader,method)(1,detail_id)
+
+    def test_booking_byte_limited_journal_pages_keep_header_and_next_offset(self):
+        reader = self.detail_reader(("UPDATE JOURNAL SET Notizen=? WHERE Buchung_id=1",["Ä" * 100000]))
+        first = reader.booking(1,1)
+        self.assertTrue(first["journal_rows"]["truncated"])
+        self.assertEqual(first["journal_rows"]["next_offset"],1)
+        self.assertEqual([row["_rowid"] for row in records(first["journal_rows"])],[1])
+        second = reader.booking(1,1,journal_offset=first["journal_rows"]["next_offset"])
+        self.assertEqual(first["booking"],second["booking"])
+        self.assertEqual([row["_rowid"] for row in records(second["journal_rows"])],[2])
+        self.assertEqual(records(second["journal_rows"])[0]["Notizen"],"Ä" * 100000)
+        self.assertFalse(second["journal_rows"]["truncated"])
+        self.assertIsNone(second["journal_rows"]["next_offset"])
+
+    def test_booking_detail_keeps_empty_and_unset_header_status(self):
+        for status in ("",None):
+            with self.subTest(status=status):
+                reader = self.detail_reader(("UPDATE BUCHUNG SET Status=? WHERE _rowid=1",[status]))
+                header = records(reader.booking(1,1)["booking"])[0]
+                self.assertEqual(header["Status"],status)
+                self.assertNotIn("Status_label",header)
 
     def test_account_filter_includes_splits_not_cross_company_rows(self):
         result = records(self.reader.bookings(1, account=1234))

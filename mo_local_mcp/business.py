@@ -9,6 +9,7 @@ from decimal import Decimal
 from .master_catalog import MASTERS_CATALOG
 from .tax_catalog import TAX_CATALOG
 from .asset_catalog import ASSET_CATALOG, ASSET_MONEY_FIELDS
+from .commerce_catalog import COMMERCE_CATALOG, COMMERCE_MONEY_FIELDS
 
 
 REFERENCE = {
@@ -65,6 +66,7 @@ MONEY_FIELDS = {
     "ZAHLUNGSPOSITION": {base + suffix for base in ("BetragZahl", "BetragMind") for suffix in ("FW", "SW")} | {"BetragValutaAG"},
 }
 MONEY_FIELDS.update(ASSET_MONEY_FIELDS)
+MONEY_FIELDS.update(COMMERCE_MONEY_FIELDS)
 
 PAYMENT_ALLOCATION_FROM = (
     "FROM ZAHLUNGSPOSITION zp "
@@ -78,11 +80,13 @@ CATALOG = {
         "meaning": "Firma/Mandant; kein Kunde des Adressbuchs",
         "api_structures": ["FirmaListItem", "FirmaItem"],
         "api_fields": {"Firma_ID": "_rowid", "Bezeichnung": "Name", "Zusatz": "Zusatz"},
+        "tools": ["list_companies", "get_company", "list_fiscal_years"],
+        "notes": ["Das Firmendetail liefert alle Originalspalten des Firmenstamms. Geschäftsjahre stehen getrennt in WIRTSCHAFTSJAHR."],
     },
     "KONTO": {
         "meaning": "Firmenbezogener Kontenstamm einschließlich unbebuchter, gesperrter und Personenkonten",
         "mapping_basis": "Datenbankstand und Kontenplan-PDF; keine verifizierte Connect-Zuordnung",
-        "tools": ["list_accounts", "get_account_statement", "get_financial_statements"],
+        "tools": ["list_accounts", "get_account_statement", "get_financial_statements", "get_trial_balance"],
         "fields": {"_rowid": "Lokale ID", "Firma_id": "Zugehörige Firma", "Nummer": "Kontonummer",
                    "Bezeichnung": "Namensvorlage; #P# verwendet den firmenbezogenen Steuerprozentsatz", "Typ": "Unveränderte Klassifikation; Präfix 3 bezeichnet Vortragssteuerung",
                    "Steuertyp": "Steuerkategorie des Kontos", "Bemerkung": "Vollständige Notizen", "Buchungssperre": "Buchungssperre, kein Ausschluss aus der Liste",
@@ -127,7 +131,7 @@ CATALOG = {
     "WIRTSCHAFTSJAHR": {
         "meaning": "Firmenbezogene Geschäftsjahre, Sperren, Währung und Versteuerungsart",
         "mapping_basis": "Datenbankstand und bereitgestelltes Bildschirmfoto der Geschäftsjahre; nur beobachtete Versteuerungsart 2 beschriftet",
-        "tools": ["list_fiscal_years", "get_account_statement", "get_financial_statements"],
+        "tools": ["list_fiscal_years", "get_account_statement", "get_financial_statements", "get_trial_balance"],
         "fields": {"_rowid": "Lokale Geschäftsjahr-ID", "Firma_id": "Zugehörige Firma", "Bezeichnung": "Bezeichnung, nicht zwingend Kalenderjahr",
                    "Von": "Beginn einschließlich", "Bis": "Ende einschließlich", "Waehrung": "Währung", "Gesperrt": "Ganzjährige Sperre",
                    **{f"P{month:02d}_Gesperrt": "Sperre der Monatsperiode" for month in range(1, 13)},
@@ -171,7 +175,7 @@ CATALOG = {
     "ZAHLUNG": {
         "meaning": "Gespeicherte OP-Zahlungen, keine Zahlungsaufträge",
         "mapping_basis": "ID-Verknüpfungen und Zahlungs-/Gutschrift-/Minderungsabgleich im Datenbankstand; keine verifizierte Connect-Zahlungszuordnung",
-        "tools": ["list_fiscal_years", "get_payment", "get_open_item"],
+        "tools": ["list_fiscal_years", "list_payments", "get_payment", "get_open_item"],
         "fields": {"_rowid": "Zahlungs-/Ausgleichs-ID", "Firma_id": "Zugehörige Firma", "Datum": "Gespeichertes Zahlungsdatum",
                    "Art": "Unveränderte Zahlungsart, nicht POSTEN.Art", "Adress_id": "Adress-ID", "Buchung_id": "Buchungs-ID; bei Ausgleichen ist 0 möglich",
                    "PKonto": "Personenkonto", "FKonto": "Finanzkonto", "ReNr": "Referenz, niemals Verknüpfungsschlüssel für Zuordnungen",
@@ -206,6 +210,7 @@ CATALOG = {
     },
     "ADRESSE": {
         "meaning": "Adressbucheintrag; kann zugleich Kunde und Lieferant sein",
+        "tools": ["list_addresses", "get_address"],
         "api_structures": ["AdresseItem", "AdresseStatus"],
         "api_fields": {"Adresse_ID": "_rowid", "AdressNr": "KZ_AdressNr", "Matchcode": "KZ_Matchcode",
                        "Kategorie": "KZ_Kategorie", "KundenStatus": "KF_Status", "LieferantenStatus": "LF_Status"},
@@ -236,15 +241,18 @@ CATALOG = {
         "api_fields": {"Buchung_ID": "_rowid", "Datum": "Datum", "Text": "Text", "Notizen": "Bemerkung",
                        "Summe": "Summe", "SummeFW": "SummeFW"},
         "notes": ["Connect kennzeichnet BuchungStatus/Status als veraltet. Gespeicherter Status=3 kommt ebenfalls vor; keine Festschreibungsbezeichnungen werden abgeleitet.",
-                  "Kontenfilter verwenden JOURNAL.Konto, um aufgeteilte Buchungen einzuschließen."],
+                  "Kontenfilter verwenden JOURNAL.Konto, um aufgeteilte Buchungen einzuschließen.",
+                  "Soll-/Habenkonten erfordern auf der gewählten Seite einen Betrag ungleich null, auch negative Stornos.",
+                  "Kostenstellenfilter vergleichen Kostenstelle1/2 exakt. Mehrere Journalfilter können verschiedene Zeilen desselben Buchungskopfs treffen."],
         "fields": {"Wj_id": "Geschäftsjahr-ID", "Firma_id": "Zugehörige Firma", "Datum": "Buchungsdatum",
                    "Art": "2 ist eine Eröffnungsbuchung; andere Werte werden nicht aus API-Filtern abgeleitet"},
         "enums": {"Art": {2: "Eröffnungsbuchung"}},
         "joins": ["BUCHUNG.Wj_id = WIRTSCHAFTSJAHR._rowid AND BUCHUNG.Firma_id = WIRTSCHAFTSJAHR.Firma_id"],
-        "tools": ["list_bookings", "get_account_statement", "get_financial_statements", "list_fiscal_years"],
+        "tools": ["list_bookings", "get_booking", "get_account_statement", "get_financial_statements", "list_fiscal_years", "get_trial_balance"],
         "report_rules": ["Art=2 liefert den Anfangssaldo, wird aber aus den Umsätzen ausgeschlossen.",
                          "Kontoauszug sortiert nach Datum, BelegNr, JOURNAL.NummerLong, Position, Journalzeilen-ID.",
-                         "Konten- und Finanzberichte umfassen alle Statuswerte und Perioden."],
+                         "Konten- und Finanzberichte umfassen alle Statuswerte und Perioden.",
+                         "Die Summen- und Saldenliste zeigt das Hauptbuch mit effektiven Sammelkonten sowie getrennten Eröffnungen und Umsätzen."],
     },
     "JOURNAL": {
         "meaning": "Soll-/Haben-Journalzeilen zu Buchungen",
@@ -263,10 +271,11 @@ CATALOG = {
                    "IV_KontoUStE": "Gespeichertes Steuerzuordnungskonto der Jahreserklärung", "BetragBemSoll": "Gespeicherte Bemessung Soll",
                    "BetragBemHaben": "Gespeicherte Bemessung Haben", "Versteuerung": "Unverändertes Versteuerungskennzeichen",
                    "SteuerStatus": "Unveränderter Steuerstatus", "DatumVerbucht": "Gespeichertes Verbuchungsdatum, nicht zwingend Buchungs-Datum"},
-        "tools": ["list_bookings", "get_account_statement", "get_financial_statements", "get_tax_journal", "get_vat_return"],
+        "tools": ["list_bookings", "get_booking", "get_account_statement", "get_financial_statements", "get_tax_journal", "get_vat_return", "get_trial_balance"],
         "report_rules": ["Originale und vorzeichenbehaftete Gegenbuchungen erhalten; Soll minus Haben ergibt den Saldo (negativ H, positiv S).",
                          "Kontensuche berücksichtigt Konto ODER SammelKonto einmal; Finanzberichte ersetzen Personenkonten, zählen sie nie doppelt.",
-                         "Jahressummen und laufende Salden werden vor der Seiteneinteilung berechnet."],
+                         "Jahressummen und laufende Salden werden vor der Seiteneinteilung berechnet.",
+                         "Die Summen- und Saldenliste ordnet Personenbuchungen dem positiven SammelKonto zu und summiert SW im Hauptbuch, getrennt nach Eröffnung und Umsatz."],
     },
     "POSTEN": {
         "meaning": "Forderungs-/Verbindlichkeitsposten einschließlich ausgeglichener Datensätze und Gutschriften",
@@ -319,6 +328,7 @@ CATALOG = {
 CATALOG.update(MASTERS_CATALOG)
 CATALOG.update(TAX_CATALOG)
 CATALOG.update(ASSET_CATALOG)
+CATALOG.update(COMMERCE_CATALOG)
 
 
 def _currency_amounts(result, table, extra_fields=()):
@@ -432,6 +442,15 @@ class BusinessReader:
 
     def companies(self, limit=100, offset=0):
         return self._page("SELECT _rowid, Name, Zusatz, Ort FROM FIRMA ORDER BY _rowid", [], limit, offset)
+
+    def company(self, company_id):
+        _integer(company_id, "firma_id")
+        result = self.database.query("SELECT * FROM FIRMA WHERE _rowid=?", [company_id], 1)
+        if not result["rows"]:
+            if result["truncated"]:
+                raise ValueError("Firmendatensatz überschreitet das Ausgabelimit; mit einer SQL-Abfrage weniger Spalten auswählen")
+            raise ValueError("Firma nicht gefunden")
+        return {"company": result}
 
     def fiscal_years(self, company_id, limit=100, offset=0):
         _integer(company_id, "firma_id")
@@ -552,7 +571,18 @@ class BusinessReader:
         _labels(result, "KF_Status", ADDRESS_STATUSES)
         return _labels(result, "LF_Status", ADDRESS_STATUSES)
 
-    def sales_documents(self, company_id, document_type=None, address_id=None, date_from=None, date_to=None, include_drafts=False, limit=100, offset=0):
+    def address(self, company_id, address_id):
+        _integer(company_id, "firma_id")
+        _integer(address_id, "adresse_id")
+        header = self.database.query("SELECT * FROM ADRESSE WHERE Firma_id=? AND _rowid=?", [company_id, address_id], 1)
+        if not header["rows"]:
+            if header["truncated"]:
+                raise ValueError("Adressdatensatz überschreitet das Ausgabelimit; mit einer SQL-Abfrage weniger Spalten auswählen")
+            raise ValueError("Adresse in dieser Firma nicht gefunden")
+        _labels(header, "KF_Status", ADDRESS_STATUSES)
+        return {"address": _labels(header, "LF_Status", ADDRESS_STATUSES)}
+
+    def sales_documents(self, company_id, document_type=None, address_id=None, date_from=None, date_to=None, include_drafts=False, limit=100, offset=0, search=""):
         _integer(company_id, "firma_id")
         where, bindings = ["Firma_id = ?"], [company_id]
         if document_type is not None:
@@ -568,6 +598,9 @@ class BusinessReader:
         if not include_drafts:
             where.append("coalesce(Entwurf,0) = 0")
         _dates(where, bindings, "Datum", date_from, date_to)
+        if search:
+            where.append("instr(lower(coalesce(AuftragsNr,'') || ' ' || coalesce(BestellNr,'') || ' ' || coalesce(Betreff,'')),lower(?))>0")
+            bindings.append(search)
         result = self._page("SELECT _rowid, Firma_id, Art, Entwurf, AuftragsNr, Datum, Adress_id, Posten_id, Betreff, Waehrung, GesamtNettoFW, GesamtSteuerFW, GesamtBruttoFW, GesamtNettoSW, GesamtBruttoSW FROM AUFTRAG WHERE " + " AND ".join(where) + " ORDER BY Datum, _rowid", bindings, limit, offset)
         return _currency_amounts(_labels(result, "Art", SALES_TYPES), "AUFTRAG")
 
@@ -587,18 +620,55 @@ class BusinessReader:
             "positions": _currency_amounts(positions, "AUFTRAGSPOSITION"),
         }
 
-    def bookings(self, company_id, date_from=None, date_to=None, account=None, search="", limit=100, offset=0):
+    def bookings(self, company_id, date_from=None, date_to=None, account=None, search="", limit=100, offset=0,
+                 document_number="", debit_account=None, credit_account=None, cost_center=None):
         _integer(company_id, "firma_id")
         where, bindings = ["b.Firma_id = ?"], [company_id]
         _dates(where, bindings, "b.Datum", date_from, date_to)
-        if account is not None:
-            _integer(account, "konto", 0)
-            where.append("EXISTS (SELECT 1 FROM JOURNAL j WHERE j.Firma_id=b.Firma_id AND j.Buchung_id=b._rowid AND j.Konto=?)")
-            bindings.append(account)
+        for value, name, side in (
+            (account, "konto", None), (debit_account, "konto_soll", "BetragSoll"),
+            (credit_account, "konto_haben", "BetragHaben"),
+        ):
+            if value is not None:
+                _integer(value, name, 0)
+                side_clause = "" if side is None else f" AND j.{side}<>0"
+                where.append(
+                    "EXISTS (SELECT 1 FROM JOURNAL j WHERE j.Firma_id=b.Firma_id "
+                    f"AND j.Buchung_id=b._rowid AND j.Konto=?{side_clause})"
+                )
+                bindings.append(value)
+        if cost_center is not None:
+            where.append(
+                "EXISTS (SELECT 1 FROM JOURNAL j WHERE j.Firma_id=b.Firma_id "
+                "AND j.Buchung_id=b._rowid AND (j.Kostenstelle1=? OR j.Kostenstelle2=?))"
+            )
+            bindings.extend((cost_center, cost_center))
+        if document_number:
+            where.append("instr(lower(coalesce(b.BelegNr,'')),lower(?))>0")
+            bindings.append(document_number)
         where.append("instr(lower(coalesce(b.BelegNr,'') || ' ' || coalesce(b.Text,'') || ' ' || coalesce(b.Referenz,'')), lower(?)) > 0")
         bindings.append(search)
         result = self._page("SELECT b._rowid, b.Firma_id, b.Datum, b.BelegNr, b.Text, b.KontoSoll, b.KontoHaben, b.Waehrung, b.Summe, b.SummeFW, b.Status FROM BUCHUNG b WHERE " + " AND ".join(where) + " ORDER BY b.Datum, b._rowid", bindings, limit, offset)
         return _currency_amounts(result, "BUCHUNG")
+
+    def booking(self, company_id, booking_id, journal_limit=100, journal_offset=0):
+        _integer(company_id, "firma_id")
+        _integer(booking_id, "buchung_id")
+        header = self.database.query("SELECT * FROM BUCHUNG WHERE Firma_id=? AND _rowid=?", [company_id, booking_id], 1)
+        if not header["rows"]:
+            if header["truncated"]:
+                raise ValueError("Buchungskopf überschreitet das Ausgabelimit; mit einer SQL-Abfrage weniger Spalten auswählen")
+            raise ValueError("Buchung in dieser Firma nicht gefunden")
+        journal = self._page(
+            "SELECT * FROM JOURNAL WHERE Firma_id=? AND Buchung_id=? ORDER BY NummerLong,Position,_rowid",
+            [company_id, booking_id], journal_limit, journal_offset,
+        )
+        if journal["truncated"] and not journal["rows"]:
+            raise ValueError("Buchungsjournalzeile überschreitet das Ausgabelimit; mit einer SQL-Abfrage weniger Spalten auswählen")
+        return {
+            "booking": _currency_amounts(header, "BUCHUNG"),
+            "journal_rows": _currency_amounts(journal, "JOURNAL"),
+        }
 
     def _payment_allocations(self, company_id, column, value, limit, offset):
         # column wählen ausschließlich die beiden internen Aufrufer, niemals ein MCP-Parameter.
@@ -662,6 +732,25 @@ class BusinessReader:
             ],
         }
 
+    def payments(self, company_id, address_id=None, date_from=None, date_to=None,
+                 search="", limit=100, offset=0):
+        _integer(company_id, "firma_id")
+        where, bindings = ["Firma_id=?"], [company_id]
+        if address_id is not None:
+            _integer(address_id, "adresse_id")
+            where.append("Adress_id=?")
+            bindings.append(address_id)
+        _dates(where, bindings, "Datum", date_from, date_to)
+        where.append("instr(lower(coalesce(ReNr,'') || ' ' || coalesce(BuText,'') || ' ' || coalesce(Referenz,'')),lower(?))>0")
+        bindings.append(search)
+        result = self._page(
+            "SELECT _rowid,Firma_id,Datum,Art,Adress_id,Buchung_id,PKonto,FKonto,ReNr,BuText,Referenz,"
+            "Waehrung,GesamtZahlFW,GesamtZahlSW,GesamtMindFW,GesamtMindSW FROM ZAHLUNG WHERE "
+            + " AND ".join(where) + " ORDER BY Datum,_rowid",
+            bindings, limit, offset,
+        )
+        return _currency_amounts(result, "ZAHLUNG")
+
     def payment(self, company_id, payment_id, limit=100, offset=0):
         _integer(company_id, "firma_id")
         _integer(payment_id, "zahlung_id")
@@ -681,7 +770,8 @@ class BusinessReader:
             ],
         }
 
-    def open_items(self, company_id, side="receivable", address_id=None, limit=100, offset=0, include_settled=False):
+    def open_items(self, company_id, side="receivable", address_id=None, limit=100, offset=0, include_settled=False,
+                   date_from=None, date_to=None):
         _integer(company_id, "firma_id")
         if side not in {"receivable", "payable", "all"}:
             raise ValueError("seite muss Forderungen, Verbindlichkeiten oder alle auswählen")
@@ -696,5 +786,6 @@ class BusinessReader:
             _integer(address_id, "adresse_id")
             where.append("Adress_id = ?")
             bindings.append(address_id)
+        _dates(where, bindings, "Datum", date_from, date_to)
         result = self._page("SELECT _rowid, Firma_id, Art, Adress_id, ReNr, Datum, PKonto, BuText, Waehrung, GesamtBruttoFW, BezahltFW, MinderungFW, OffenFW, GesamtBruttoSW, BezahltSW, MinderungSW, OffenSW FROM POSTEN WHERE " + " AND ".join(where) + " ORDER BY Datum, _rowid", bindings, limit, offset)
         return _currency_amounts(_labels(result, "Art", OPEN_ITEM_TYPES), "POSTEN")

@@ -192,6 +192,195 @@ class StatementTests(unittest.TestCase):
         self.assertEqual(report['entries'][-1]['balance_side'],'H')
         self.assertEqual(report['closing_balance'],'-50.00')
 
+    def test_trial_balance_separates_opening_and_signed_turnovers(self):
+        report = self.account_reader().trial_balance(1,2025,1000,1000)
+        self.assertEqual(report['accounts'],[{
+            'account':1000, 'name':'Kasse',
+            'opening':{'debit':'100.00','credit':'40.00','balance':'60.00'},
+            'turnovers':{'debit':'20.00','credit':'30.00'},
+            'closing_balance':'50.00', 'balance_side':'S',
+        }])
+        self.assertEqual(report['totals'],{
+            'opening':{'debit':'100.00','credit':'40.00','balance':'60.00'},
+            'turnovers':{'debit':'20.00','credit':'30.00'},
+            'closing_balance':'50.00',
+        })
+        self.assertEqual(report['currency'],'EUR')
+        self.assertEqual(report['fiscal_year']['_rowid'],2)
+        self.assertEqual(report['total_accounts'],1)
+        self.assertFalse(report['truncated'])
+        self.assertIsNone(report['next_offset'])
+
+    def test_trial_balance_collective_accounts_and_carryforwards_are_retained(self):
+        reader = self.account_reader("""
+            INSERT INTO JOURNAL VALUES (1,2,1400,1400,50,0,108,1,'Direktes Sammelkonto',880,'JS',700,0);
+        """)
+        report = reader.trial_balance(1,2025,1400,1400)
+        self.assertEqual([row['account'] for row in report['accounts']],[1400])
+        self.assertEqual(report['accounts'][0]['closing_balance'],'10.50')
+        self.assertEqual(report['totals']['turnovers'],{'debit':'10.50','credit':'0.00'})
+        self.assertEqual(reader.trial_balance(1,2025,10001,10001)['accounts'],[])
+        carryforwards = reader.trial_balance(1,2025,9000,9008)
+        self.assertEqual([row['account'] for row in carryforwards['accounts']],[9000,9008])
+        self.assertEqual([row['closing_balance'] for row in carryforwards['accounts']],['70.00','-70.00'])
+        self.assertEqual([row['balance_side'] for row in carryforwards['accounts']],['S','H'])
+
+    def test_trial_balance_keeps_zero_accounts_nulls_and_raw_name_templates(self):
+        reader = self.account_reader("""
+            INSERT INTO KONTO VALUES (1,1001,'Kasse {Jahr}','1'),(1,1002,'Unbebucht','1');
+            INSERT INTO BUCHUNG VALUES (17,1,2,'2025-06-01',NULL,NULL,'NULLART');
+            INSERT INTO JOURNAL (Firma_id,Buchung_id,Konto,SammelKonto,BetragSoll,BetragHaben)
+                VALUES (1,17,1001,0,500,500),(1,17,1001,0,NULL,NULL);
+            ALTER TABLE JOURNAL ADD COLUMN BetragSollFW;
+            ALTER TABLE JOURNAL ADD COLUMN BetragHabenFW;
+            UPDATE JOURNAL SET BetragSollFW=987654,BetragHabenFW=123456;
+            DELETE FROM KONTOSTRUKTUR;
+            DELETE FROM STRUKTURPOSITION;
+        """)
+        report = reader.trial_balance(1,2025,1001,1002)
+        self.assertEqual(report['accounts'],[{
+            'account':1001, 'name':'Kasse {Jahr}',
+            'opening':{'debit':'0.00','credit':'0.00','balance':'0.00'},
+            'turnovers':{'debit':'5.00','credit':'5.00'},
+            'closing_balance':'0.00', 'balance_side':'',
+        }])
+        self.assertEqual(report['total_accounts'],1)
+        self.assertEqual(report['totals']['turnovers'],{'debit':'5.00','credit':'5.00'})
+
+    def test_trial_balance_excludes_wrong_company_year_and_outside_dates(self):
+        reader = self.account_reader("""
+            INSERT INTO BUCHUNG VALUES
+                (17,1,1,'2025-06-01',2,1,'FALSCHES-JAHR'),
+                (18,1,2,'2024-12-31',2,1,'ZU-FRUEH'),
+                (19,1,2,'2026-01-01',2,1,'ZU-SPAET');
+            INSERT INTO JOURNAL (Firma_id,Buchung_id,Konto,SammelKonto,BetragSoll,BetragHaben)
+                VALUES (1,17,1000,0,999999,0),(1,18,1000,0,999999,0),
+                    (1,19,1000,0,999999,0),(2,12,1000,0,999999,0),
+                    (1,16,1000,0,999999,0);
+        """)
+        report = reader.trial_balance(1,2025,1000,1000)
+        self.assertEqual(report['totals']['closing_balance'],'50.00')
+        self.assertEqual(report['totals']['turnovers'],{'debit':'20.00','credit':'30.00'})
+
+    def test_trial_balance_noncalendar_year_includes_both_boundaries(self):
+        reader = self.account_reader("""
+            UPDATE WIRTSCHAFTSJAHR SET Von='2025-07-01',Bis='2026-06-30',Waehrung='USD' WHERE _rowid=2;
+            INSERT INTO BUCHUNG VALUES
+                (17,1,2,'2025-07-01',NULL,2,'ERÖFFNUNG'),
+                (18,1,2,'2026-06-30',99,NULL,'SCHLUSS'),
+                (19,1,2,'2025-06-30',2,1,'ZU-FRUEH'),
+                (20,1,2,'2026-07-01',2,1,'ZU-SPAET');
+            INSERT INTO JOURNAL (Firma_id,Buchung_id,Konto,SammelKonto,BetragSoll,BetragHaben)
+                VALUES (1,17,1000,0,700,0),(1,18,1000,0,0,200),
+                    (1,19,1000,0,999999,0),(1,20,1000,0,999999,0);
+        """)
+        report = reader.trial_balance(1,2025,1000,1000)
+        self.assertEqual(report['currency'],'USD')
+        self.assertEqual(report['fiscal_year']['Von'],'2025-07-01')
+        self.assertEqual(report['fiscal_year']['Bis'],'2026-06-30')
+        self.assertEqual(report['totals'],{
+            'opening':{'debit':'7.00','credit':'0.00','balance':'7.00'},
+            'turnovers':{'debit':'0.00','credit':'2.00'}, 'closing_balance':'5.00',
+        })
+
+    def test_trial_balance_pages_keep_full_filtered_totals(self):
+        reader = self.account_reader()
+        full = reader.trial_balance(1,2025)
+        first = reader.trial_balance(1,2025,limit=2)
+        self.assertTrue(first['truncated'])
+        self.assertEqual(first['next_offset'],2)
+        accounts = list(first['accounts'])
+        page = first
+        while page['next_offset'] is not None:
+            page = reader.trial_balance(1,2025,limit=2,offset=page['next_offset'])
+            self.assertEqual(page['totals'],full['totals'])
+            self.assertEqual(page['total_accounts'],full['total_accounts'])
+            accounts.extend(page['accounts'])
+        self.assertEqual(accounts,full['accounts'])
+        self.assertEqual(first['totals'],full['totals'])
+        self.assertEqual(len({row['account'] for row in accounts}),full['total_accounts'])
+        beyond = reader.trial_balance(1,2025,offset=1000)
+        self.assertEqual(beyond['accounts'],[])
+        self.assertEqual(beyond['totals'],full['totals'])
+        self.assertEqual(beyond['total_accounts'],full['total_accounts'])
+        self.assertFalse(beyond['truncated'])
+        self.assertIsNone(beyond['next_offset'])
+
+    def test_trial_balance_more_than_500_groups_are_summed_before_pagination(self):
+        reader = self.account_reader("""
+            WITH RECURSIVE n(value) AS (SELECT 20000 UNION ALL SELECT value+1 FROM n WHERE value<20500)
+                INSERT INTO KONTO SELECT 1,value,'Synthetisches Konto','1' FROM n;
+            INSERT INTO JOURNAL (Firma_id,Buchung_id,Konto,SammelKonto,BetragSoll,BetragHaben)
+                SELECT 1,12,Nummer,0,100,0 FROM KONTO WHERE Firma_id=1 AND Nummer BETWEEN 20000 AND 20500;
+        """)
+        first = reader.trial_balance(1,2025,20000,20500,limit=500)
+        last = reader.trial_balance(1,2025,20000,20500,limit=500,offset=first['next_offset'])
+        self.assertEqual(first['total_accounts'],501)
+        self.assertEqual(len(first['accounts']),500)
+        self.assertEqual(first['next_offset'],500)
+        self.assertEqual([row['account'] for row in last['accounts']],[20500])
+        self.assertEqual(last['total_accounts'],501)
+        self.assertFalse(last['truncated'])
+        self.assertIsNone(last['next_offset'])
+        self.assertEqual(first['totals'],{
+            'opening':{'debit':'0.00','credit':'0.00','balance':'0.00'},
+            'turnovers':{'debit':'501.00','credit':'0.00'}, 'closing_balance':'501.00',
+        })
+        self.assertEqual(last['totals'],first['totals'])
+
+    def test_trial_balance_empty_filter_has_zero_totals(self):
+        reader = self.account_reader()
+        for bounds in ({'account_from':99999},{'account_to':0},{'account_from':1002,'account_to':1002}):
+            with self.subTest(bounds=bounds):
+                report = reader.trial_balance(1,2025,**bounds)
+                self.assertEqual(report['accounts'],[])
+                self.assertEqual(report['total_accounts'],0)
+                self.assertEqual(report['totals'],{
+                    'opening':{'debit':'0.00','credit':'0.00','balance':'0.00'},
+                    'turnovers':{'debit':'0.00','credit':'0.00'}, 'closing_balance':'0.00',
+                })
+                self.assertFalse(report['truncated'])
+                self.assertIsNone(report['next_offset'])
+
+    def test_trial_balance_requires_unique_fiscal_year(self):
+        reader = self.account_reader()
+        with self.assertRaisesRegex(ValueError,'genau ein Wirtschaftsjahr'):
+            reader.trial_balance(1,2026)
+        duplicate = self.account_reader("""
+            INSERT INTO WIRTSCHAFTSJAHR VALUES (4,1,'Doppeltes Jahr','2025-07-01','2026-06-30','EUR',0);
+        """)
+        with self.assertRaisesRegex(ValueError,'genau ein Wirtschaftsjahr'):
+            duplicate.trial_balance(1,2025)
+
+    def test_trial_balance_requires_unique_definitions_for_all_filtered_accounts(self):
+        cases = (
+            "DELETE FROM KONTO WHERE Firma_id=1 AND Nummer=1000;",
+            "INSERT INTO KONTO VALUES (1,1000,'Doppelte Kasse','1');",
+        )
+        for sql in cases:
+            with self.subTest(sql=sql):
+                reader = self.account_reader(sql)
+                with self.assertRaisesRegex(ValueError,'Genau eine Kontendefinition in dieser Firma erwartet'):
+                    reader.trial_balance(1,2025,1000,1000,offset=10)
+                outside = reader.trial_balance(1,2025,1400,1400)
+                self.assertEqual(outside['accounts'][0]['closing_balance'],'10.00')
+
+    def test_trial_balance_validates_ids_bounds_and_pagination(self):
+        reader = self.account_reader()
+        for company, year, arguments in (
+            (0,2025,{}), (True,2025,{}), (1,0,{}), (1,10000,{}),
+            (1,2025,{'account_from':-1}), (1,2025,{'account_to':-1}),
+            (1,2025,{'account_from':'1000'}), (1,2025,{'account_to':True}),
+            (1,2025,{'limit':0}), (1,2025,{'limit':501}),
+            (1,2025,{'limit':1.5}), (1,2025,{'offset':-1}),
+            (1,2025,{'offset':False}),
+        ):
+            with self.subTest(company=company,year=year,arguments=arguments):
+                with self.assertRaises(ValueError):
+                    reader.trial_balance(company,year,**arguments)
+        with self.assertRaisesRegex(ValueError,'konto_von darf konto_bis nicht überschreiten'):
+            reader.trial_balance(1,2025,1001,1000)
+
     def test_tax_debits_stay_in_stored_liability_position(self):
         report = self.reader().financial_statements(1,2025)
         assets = report['balance_sheet']['assets']

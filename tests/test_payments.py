@@ -79,6 +79,21 @@ class PaymentTests(unittest.TestCase):
                 (992,1,99,1,11,99999,99999,0,0,0,'Zahlung anderer Firma'),
                 (993,1,10,4,99,99999,99999,0,0,0,'Position anderer Firma');
         ''')
+        db.executescript('''
+            ALTER TABLE ZAHLUNG ADD COLUMN Art;
+            ALTER TABLE ZAHLUNG ADD COLUMN Adress_id;
+            ALTER TABLE ZAHLUNG ADD COLUMN PKonto;
+            ALTER TABLE ZAHLUNG ADD COLUMN BuText;
+            ALTER TABLE ZAHLUNG ADD COLUMN Referenz;
+            UPDATE ZAHLUNG SET Art=4,Adress_id=1,PKonto=10000,BuText='Synthetische Zahlung',Referenz='';
+            UPDATE ZAHLUNG SET BuText='Synthetisch 100% vollständig',Referenz='REF_20' WHERE _rowid=20;
+            UPDATE ZAHLUNG SET Adress_id=2,Referenz='Erstattung Referenz' WHERE _rowid=30;
+            UPDATE ZAHLUNG SET BuText=NULL,Referenz=NULL WHERE _rowid=40;
+            INSERT INTO ZAHLUNG (_rowid,Firma_id,Datum,ReNr,Waehrung,Buchung_id,FKonto,
+                GesamtZahlFW,GesamtZahlSW,GesamtMindFW,GesamtMindSW,Art,Adress_id,PKonto,BuText,Referenz)
+                VALUES (60,1,'2025-01-15','OHNE-ZUORDNUNG','USD',0,1200,2500,2300,NULL,0,99,3,10001,
+                        'Synthetisch ohne Zuordnungen','Einzelkopf');
+        ''')
         db.commit()
         db.close()
         plain = path.read_bytes()
@@ -166,6 +181,82 @@ class PaymentTests(unittest.TestCase):
         self.assertEqual(records(self.reader.open_item(1,7)['item'])[0]['Entwurf'],1)
         with self.assertRaises(ValueError):
             self.reader.open_items(1,include_settled='ja')
+
+    def test_payment_list_has_each_head_once_including_unallocated_and_signed_heads(self):
+        result = self.reader.payments(1)
+        rows = records(result)
+        self.assertEqual([row['_rowid'] for row in rows],[10,20,30,40,41,50,60])
+        self.assertEqual(result['columns'],[
+            '_rowid','Firma_id','Datum','Art','Adress_id','Buchung_id','PKonto','FKonto','ReNr',
+            'BuText','Referenz','Waehrung','GesamtZahlFW','GesamtZahlSW','GesamtMindFW','GesamtMindSW',
+        ])
+        self.assertEqual([row['GesamtZahlFW'] for row in rows[:3]],['130.00','0.00','-20.00'])
+        self.assertEqual((rows[0]['GesamtMindFW'],rows[0]['GesamtMindSW']),('9.00','9.00'))
+        self.assertEqual((rows[1]['Buchung_id'],rows[1]['FKonto']),(0,0))
+        self.assertEqual(rows[0]['Art'],4)
+        self.assertNotIn('Art_label',rows[0])
+        self.assertEqual((rows[-1]['Waehrung'],rows[-1]['GesamtZahlFW'],rows[-1]['GesamtZahlSW']),
+                         ('USD','25.00','23.00'))
+        self.assertEqual(rows[-1]['Art'],99)
+        self.assertIsNone(rows[-1]['GesamtMindFW'])
+        self.assertEqual(rows[-1]['GesamtMindSW'],'0.00')
+        self.assertEqual(self.reader.payment(1,60)['allocations']['rows'],[])
+        self.assertIsNone(result['next_offset'])
+
+    def test_payment_list_inclusive_dates_and_company_scoped_addresses(self):
+        rows = records(self.reader.payments(1,date_from='2025-01-11',date_to='2025-01-12'))
+        self.assertEqual([(row['_rowid'],row['GesamtZahlFW']) for row in rows],[(20,'0.00'),(30,'-20.00')])
+        self.assertEqual([row['_rowid'] for row in records(self.reader.payments(1,date_from='2025-01-15'))],[50,60])
+        self.assertEqual([row['_rowid'] for row in records(self.reader.payments(1,date_to='2025-01-10'))],[10])
+        self.assertEqual([row['_rowid'] for row in records(self.reader.payments(1,address_id=2))],[30])
+        self.assertEqual([row['_rowid'] for row in records(self.reader.payments(1,address_id=1))],[10,20,40,41,50])
+        self.assertEqual(self.reader.payments(1,address_id=999)['rows'],[])
+        self.assertEqual(self.reader.payments(1,address_id=1,date_from='2025-01-12',date_to='2025-01-12')['rows'],[])
+        self.assertEqual([row['_rowid'] for row in records(self.reader.payments(2))],[99])
+
+    def test_payment_list_literal_search_covers_reference_number_text_and_reference(self):
+        for search, expected in (('sammelzahlung',[10]),('100%',[20]),('%',[20]),('_',[20]),
+                                 ('ref_20',[20]),('ERSTATTUNG REFERENZ',[30]),('Einzelkopf',[60]),
+                                 ('ZAHLUNG',[10,30,40,41,50]),("' OR 1=1 --",[]),('Nicht vorhanden',[])):
+            with self.subTest(search=search):
+                result = self.reader.payments(1,search=search)
+                self.assertEqual([row['_rowid'] for row in records(result)],expected)
+                if not expected:
+                    self.assertFalse(result['truncated'])
+                    self.assertIsNone(result['next_offset'])
+
+    def test_payment_list_pagination_visits_each_head_once(self):
+        ids, offset = [], 0
+        while True:
+            page = self.reader.payments(1,limit=2,offset=offset)
+            ids.extend(row['_rowid'] for row in records(page))
+            next_offset = page['next_offset']
+            if next_offset is None:
+                self.assertFalse(page['truncated'])
+                break
+            self.assertTrue(page['truncated'])
+            self.assertEqual(next_offset,offset+len(page['rows']))
+            offset = next_offset
+        self.assertEqual(ids,[10,20,30,40,41,50,60])
+        self.assertEqual(len(ids),len(set(ids)))
+        empty = self.reader.payments(1,offset=99)
+        self.assertEqual(empty['rows'],[])
+        self.assertFalse(empty['truncated'])
+        self.assertIsNone(empty['next_offset'])
+
+    def test_payment_list_rejects_invalid_ids_dates_and_page_parameters(self):
+        for value in (0,-1,True,'1',1.5,None):
+            with self.subTest(company_id=value),self.assertRaises(ValueError):
+                self.reader.payments(value)
+        for value in (0,-1,True,'1',1.5):
+            with self.subTest(address_id=value),self.assertRaises(ValueError):
+                self.reader.payments(1,address_id=value)
+        for arguments in ({'date_from':'2025-02-30'},{'date_to':'20250101'},
+                          {'date_from':'2025-01-12','date_to':'2025-01-11'},
+                          {'limit':0},{'limit':501},{'limit':True},{'limit':1.5},{'limit':'1'},
+                          {'offset':-1},{'offset':True},{'offset':1.5},{'offset':'1'}):
+            with self.subTest(arguments=arguments),self.assertRaises(ValueError):
+                self.reader.payments(1,**arguments)
 
 
 if __name__ == '__main__':

@@ -69,6 +69,39 @@ class DeutscheAusgabeTests(unittest.TestCase):
         prozentsatz = ergebnis['zeilen'][0][ergebnis['spalten'].index(metadaten['ausgabespalte'])]
         self.assertEqual((rohwert, prozentsatz), (1900, '19.00'))
 
+    def test_neue_details_und_hauptbuchsalden_werden_uebersetzt(self):
+        tabelle = {
+            'columns': ['_rowid', 'Status', 'Steuersatz', 'Summe', 'SO_Bemerkung'],
+            'rows': [[1, 987, '', '-12.34', 'unknown']],
+        }
+        ergebnis = deutsche_ausgabe({
+            'booking': tabelle, 'address': tabelle, 'journal_rows': tabelle,
+            'total_accounts': 1,
+            'accounts': [{
+                'account': 1400, 'name': 'Vorlage #P#',
+                'opening': {'debit': '10.00', 'credit': '0.00', 'balance': '10.00'},
+                'turnovers': {'debit': '0.00', 'credit': '12.34'},
+                'closing_balance': '-2.34', 'balance_side': 'H',
+            }],
+            'totals': {'closing_balance': '-2.34'},
+            'tools': ['list_payments', 'get_booking', 'get_address', 'get_trial_balance'],
+        })
+        for schluessel in ('buchung', 'adresse', 'journalzeilen'):
+            self.assertEqual(ergebnis[schluessel]['spalten'], tabelle['columns'])
+            self.assertEqual(ergebnis[schluessel]['zeilen'], tabelle['rows'])
+        self.assertEqual(ergebnis['anzahl_konten'], 1)
+        self.assertEqual(ergebnis['konten'][0], {
+            'konto': 1400, 'name': 'Vorlage #P#',
+            'eroeffnung': {'soll': '10.00', 'haben': '0.00', 'saldo': '10.00'},
+            'umsaetze': {'soll': '0.00', 'haben': '12.34'},
+            'endsaldo': '-2.34', 'saldoseite': 'H',
+        })
+        self.assertEqual(ergebnis['summen'], {'endsaldo': '-2.34'})
+        self.assertEqual(ergebnis['werkzeuge'], [
+            'zahlungen_auflisten', 'buchung_abrufen', 'adresse_abrufen',
+            'summen_und_salden_anzeigen',
+        ])
+
 
 if __name__ == '__main__':
     unittest.main()

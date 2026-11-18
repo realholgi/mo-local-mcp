@@ -11,7 +11,7 @@ from mcp.types import ToolAnnotations
 from .database import OfficeDatabase
 from .business import BusinessReader, CATALOG, MONEY_CONVENTION, MONEY_FIELDS, REFERENCE
 from .statements import StatementReader
-from . import assets, masters, receivables, taxes
+from . import assets, commerce, masters, personal_accounts, receivables, taxes
 from .ausgabe import deutsche_ausgabe
 from .kommandozeile import DeutscherArgumentParser
 from .mcp_deutsch import DeutscherMCP
@@ -128,6 +128,15 @@ def create_server(database):
         return business.companies(anzahl, versatz)
 
     @werkzeug
+    def firma_abrufen(firma_id: int) -> dict:
+        """Liest den vollständigen Firmenstamm mit Anschrift, Steuerangaben und Kontenplan.
+
+        Originalspalten bleiben erhalten. Geschäftsjahre sind über geschaeftsjahre_auflisten
+        abrufbar. Keine Auswahl einer Standardfirma und keine Änderung der Firma.
+        """
+        return business.company(firma_id)
+
+    @werkzeug
     def geschaeftsjahre_auflisten(firma_id: int, anzahl: int = 100, versatz: int = 0) -> dict:
         """Listet Zeiträume, Währung, Versteuerung, Jahres-/Monatssperren und Firmenzähler.
 
@@ -181,10 +190,19 @@ def create_server(database):
         )
 
     @werkzeug
+    def adresse_abrufen(firma_id: int, adresse_id: int) -> dict:
+        """Liest die vollständige Firmenadresse mit Kunden- und Lieferantenstatus.
+
+        Auch inaktive, gesperrte und rollenlose Adressen bleiben gezielt abrufbar.
+        Originalspalten und Notizen bleiben erhalten. Keine Geldumrechnung.
+        """
+        return business.address(firma_id, adresse_id)
+
+    @werkzeug
     def verkaufsbelege_auflisten(
         firma_id: int, belegart: int | None = None, adresse_id: int | None = None,
         datum_von: str | None = None, datum_bis: str | None = None,
-        mit_entwuerfen: bool = False, anzahl: int = 100, versatz: int = 0,
+        mit_entwuerfen: bool = False, anzahl: int = 100, versatz: int = 0, suche: str = "",
     ) -> dict:
         """Listet Verkaufsbelege mit Arten, Datums-/Adressfilter und getrennten FW-/SW-Beträgen.
 
@@ -192,9 +210,10 @@ def create_server(database):
         5 Abschlagsrechnung, 6 Korrekturrechnung, 7 Proforma, 8 Storno, 9 Kostenvoranschlag.
         Entwürfe sind standardmäßig ausgeschlossen. ISO-Datumsgrenzen einschließlich beider
         Enden. Rechnungen können bezahlt oder storniert sein und sind kein Umsatznachweis.
+        suche durchsucht AuftragsNr, BestellNr und Betreff wörtlich.
         """
         return business.sales_documents(
-            firma_id, belegart, adresse_id, datum_von, datum_bis, mit_entwuerfen, anzahl, versatz)
+            firma_id, belegart, adresse_id, datum_von, datum_bis, mit_entwuerfen, anzahl, versatz, suche)
 
     @werkzeug
     def verkaufsbeleg_abrufen(
@@ -209,32 +228,108 @@ def create_server(database):
         return business.sales_document(firma_id, beleg_id, positionen_anzahl, positionen_versatz)
 
     @werkzeug
+    def einkaufsbelege_auflisten(
+        firma_id: int, belegart: int | None = None, adresse_id: int | None = None,
+        datum_von: str | None = None, datum_bis: str | None = None,
+        mit_entwuerfen: bool = False, suche: str = "", anzahl: int = 100, versatz: int = 0,
+    ) -> dict:
+        """Listet Einkaufsbelege mit Datums-, Adress-, Belegart- und wörtlichem Textfilter.
+
+        Entwürfe sind standardmäßig ausgeschlossen. Belegarten 101–107 sind dokumentiert;
+        weitere gespeicherte Codes bleiben roh. Geld ist bereits umgerechnet, FW/SW getrennt.
+        Eine Eingangsrechnung beweist weder eine offene Zahlung noch gebuchten Aufwand.
+        """
+        return commerce.list_purchase_documents(
+            business, firma_id, belegart, adresse_id, datum_von, datum_bis,
+            mit_entwuerfen, suche, anzahl, versatz)
+
+    @werkzeug
+    def einkaufsbeleg_abrufen(
+        firma_id: int, beleg_id: int, positionen_anzahl: int = 100, positionen_versatz: int = 0,
+    ) -> dict:
+        """Liest den vollständigen Einkaufsbelegkopf und seitenweise geordnete Positionen.
+
+        Beide gehören zur ausdrücklich gewählten Firma. Auch Entwürfe sind gezielt abrufbar.
+        Text-, Alternativ- und Layoutpositionen nicht pauschal als Aufwand summieren.
+        Geld ist bereits umgerechnet; Mengen, Prozentsätze und Kurse bleiben unverändert.
+        """
+        return commerce.get_purchase_document(
+            business, firma_id, beleg_id, positionen_anzahl, positionen_versatz)
+
+    @werkzeug
+    def artikel_auflisten(
+        firma_id: int, suche: str = "", artikelart: int | None = None,
+        nur_lagerartikel: bool = False, warengruppe: str | None = None,
+        anzahl: int = 100, versatz: int = 0,
+    ) -> dict:
+        """Listet Artikel und Leistungen mit wörtlicher Suche und Filtern.
+
+        artikelart: 1 Artikel, 2 Leistung; weitere gespeicherte Codes bleiben roh.
+        warengruppe vergleicht exakt, nur_lagerartikel wählt das gespeicherte Lagerkennzeichen.
+        Gesperrte Artikel bleiben sichtbar. Preise sind bereits umgerechnet.
+        Stammpreise haben keine eigene belegte Währung und sind keine aktuellen Lagerbestände.
+        """
+        return commerce.list_articles(
+            business, firma_id, suche, artikelart, nur_lagerartikel, warengruppe, anzahl, versatz)
+
+    @werkzeug
+    def projekte_auflisten(firma_id: int, suche: str = "", anzahl: int = 100, versatz: int = 0) -> dict:
+        """Listet Firmenprojekte mit wörtlicher Suche, Zeitraum, Notizen und rohem Status.
+
+        Statuscodes bleiben unverändert. Keine Ableitung von Projektergebnis oder Arbeitszeit.
+        """
+        return commerce.list_projects(business, firma_id, suche, anzahl, versatz)
+
+    @werkzeug
     def buchungen_auflisten(
         firma_id: int, datum_von: str | None = None, datum_bis: str | None = None,
         konto: int | None = None, suche: str = "", anzahl: int = 100, versatz: int = 0,
+        belegnummer: str = "", konto_soll: int | None = None, konto_haben: int | None = None,
+        kostenstelle: str | None = None,
     ) -> dict:
         """Listet Buchungen mit einschließlich gesetzten ISO-Datumsgrenzen und wörtlicher Textsuche.
 
-        Der Kontofilter verwendet JOURNAL.Konto, auch bei Splittbuchungen. Status bleibt ein
-        gespeicherter Rohwert und ist kein Festschreibungsfilter. Summe/SummeFW sind umgerechnet.
+        Kontenfilter verwenden JOURNAL.Konto, auch bei Splittbuchungen. konto_soll/konto_haben
+        wählen Journalzeilen mit einem Betrag ungleich null auf der jeweiligen Seite.
+        Negative Stornos bleiben enthalten. kostenstelle vergleicht Kostenstelle1/2 exakt.
+        Mehrere Filter gelten gemeinsam für den Buchungskopf, nicht zwingend dieselbe Zeile.
+        belegnummer sucht wörtlich nur in BelegNr. Status bleibt ein unveränderter Rohwert.
+        Summe/SummeFW sind bereits umgerechnet.
         """
-        return business.bookings(firma_id, datum_von, datum_bis, konto, suche, anzahl, versatz)
+        return business.bookings(
+            firma_id, datum_von, datum_bis, konto, suche, anzahl, versatz,
+            belegnummer, konto_soll, konto_haben, kostenstelle)
+
+    @werkzeug
+    def buchung_abrufen(
+        firma_id: int, buchung_id: int,
+        journal_anzahl: int = 100, journal_versatz: int = 0,
+    ) -> dict:
+        """Liest den vollständigen Buchungskopf und seitenweise Journalzeilen derselben Firma.
+
+        Journalreihenfolge: NummerLong, Position, _rowid. Der Kopf bleibt auf jeder Seite
+        vollständig. Vorzeichen, Storno, Steuerschlüssel und rohe Statuswerte bleiben erhalten.
+        Geld ist bereits umgerechnet, FW/SW bleiben getrennt. Keine Summen aus Teilseiten ableiten.
+        """
+        return business.booking(firma_id, buchung_id, journal_anzahl, journal_versatz)
 
     @werkzeug
     def offene_posten_auflisten(
         firma_id: int, seite: Literal["forderungen", "verbindlichkeiten", "alle"] = "forderungen",
         adresse_id: int | None = None, anzahl: int = 100, versatz: int = 0,
         mit_ausgeglichenen: bool = False,
+        datum_von: str | None = None, datum_bis: str | None = None,
     ) -> dict:
         """Listet gespeicherte offene Forderungen/Verbindlichkeiten samt negativen Gutschriften.
 
         Standardfilter POSTEN.OffenFW <> 0; optional auch ausgeglichene Posten. Entwürfe sind
-        ausgeschlossen, historische null-Entwurfsflags gelten als Nichtentwurf. Keine
-        Stichtags-/Überfälligkeitsrechnung und keine Vorzeichen- oder Währungsumrechnung.
+        ausgeschlossen, historische null-Entwurfsflags gelten als Nichtentwurf.
+        Datumsgrenzen filtern das Belegdatum einschließlich, nicht den historischen OP-Saldo.
+        Keine Stichtags-/Überfälligkeitsrechnung und keine Vorzeichen- oder Währungsumrechnung.
         """
         return business.open_items(
             firma_id, {"forderungen": "receivable", "verbindlichkeiten": "payable", "alle": "all"}[seite],
-            adresse_id, anzahl, versatz, mit_ausgeglichenen)
+            adresse_id, anzahl, versatz, mit_ausgeglichenen, datum_von, datum_bis)
 
     @werkzeug
     def offenen_posten_abrufen(
@@ -250,6 +345,21 @@ def create_server(database):
         """
         return business.open_item(
             firma_id, posten_id, positionen_anzahl, positionen_versatz, zahlungen_anzahl, zahlungen_versatz)
+
+    @werkzeug
+    def zahlungen_auflisten(
+        firma_id: int, adresse_id: int | None = None,
+        datum_von: str | None = None, datum_bis: str | None = None,
+        suche: str = "", anzahl: int = 100, versatz: int = 0,
+    ) -> dict:
+        """Listet Zahlungsköpfe einmal je Zahlung, auch ohne Zuordnungen.
+
+        ISO-Datumsgrenzen sind einschließlich. Wörtliche Suche in ReNr, BuText und Referenz.
+        Nullverrechnungen und negative Zahlungen bleiben enthalten. Art bleibt ein Rohwert.
+        Geld ist bereits umgerechnet. FW/SW und Währungen nicht addieren.
+        Zuordnungen sind über zahlung_abrufen zugänglich.
+        """
+        return business.payments(firma_id, adresse_id, datum_von, datum_bis, suche, anzahl, versatz)
 
     @werkzeug
     def zahlung_abrufen(firma_id: int, zahlung_id: int, anzahl: int = 100, versatz: int = 0) -> dict:
@@ -289,6 +399,50 @@ def create_server(database):
         Der Steuerschlüssel ist das gespeicherte Steuersatz-Feld, kein abgeleiteter Prozentsatz.
         """
         return statements.account_statement(firma_id, jahr, konto, anzahl, versatz)
+
+    @werkzeug
+    def summen_und_salden_anzeigen(
+        firma_id: int, jahr: int, konto_von: int | None = None,
+        konto_bis: int | None = None, anzahl: int = 100, versatz: int = 0,
+    ) -> dict:
+        """Zeigt jährliche Hauptbuchsalden mit getrennter Eröffnung und Umsätzen.
+
+        jahr wählt den Geschäftsjahresbeginn. Kontengrenzen sind einschließlich.
+        Personenbuchungen zählen einmal im gespeicherten Sammelkonto. Vortragskonten,
+        Nullsalden und vorzeichenbehaftete Stornos bleiben enthalten. Keine Statusfilter.
+        Summen gelten für den vollständigen Kontenfilter, unabhängig von der Seite.
+        Geld ist in SW-Währung des Geschäftsjahres. name bleibt die gespeicherte Namensvorlage.
+        Ein Kontenfilter muss nicht ausgeglichen sein. Keine Abschlussgliederung erforderlich.
+        """
+        return statements.trial_balance(firma_id, jahr, konto_von, konto_bis, anzahl, versatz)
+
+    @werkzeug
+    def debitoren_salden_anzeigen(
+        firma_id: int, datum_von: str | None = None, datum_bis: str | None = None,
+        adresse_id: int | None = None, anzahl: int = 100, versatz: int = 0,
+    ) -> dict:
+        """Zeigt Journal-Soll, -Haben und Salden der gespeicherten Kundenkonten.
+
+        Inklusive Datumsgrenzen; alle Buchungsstatus und vorzeichenbehafteten Stornos.
+        Gruppiert nach Konto und tatsächlicher FW-/SW-Währung. Keine Währungsumrechnung.
+        Ein Adressfilter wählt das ganze zugeordnete Konto, auch bei mehreren Adressen.
+        Eröffnungen sind enthalten. Kein historischer OP-Saldo und kein reiner Umsatz.
+        """
+        return personal_accounts.list_personal_balances(
+            business, firma_id, "customer", datum_von, datum_bis, adresse_id, anzahl, versatz)
+
+    @werkzeug
+    def kreditoren_salden_anzeigen(
+        firma_id: int, datum_von: str | None = None, datum_bis: str | None = None,
+        adresse_id: int | None = None, anzahl: int = 100, versatz: int = 0,
+    ) -> dict:
+        """Zeigt Journal-Soll, -Haben und Salden der gespeicherten Lieferantenkonten.
+
+        Gleiche Grundlage wie debitoren_salden_anzeigen. Saldo ist Soll minus Haben,
+        negatives Vorzeichen bleibt erhalten. Keine Aufteilung gemeinsam genutzter Konten.
+        """
+        return personal_accounts.list_personal_balances(
+            business, firma_id, "supplier", datum_von, datum_bis, adresse_id, anzahl, versatz)
 
     @werkzeug
     def offene_posten_zum_stichtag_anzeigen(

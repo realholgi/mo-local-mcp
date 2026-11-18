@@ -117,18 +117,29 @@ Konfigurationsbeispiel mit anzupassenden Platzhalterpfaden:
 | `sql_abfragen` | Gebundene SELECT-/WITH-Abfragen |
 | `fachschema_anzeigen` | Fachbegriffe, Einheiten, Wertelisten, Verknüpfungen und Grenzen |
 | `firmen_auflisten` | Firmen mit lokalen Kennungen |
+| `firma_abrufen` | Vollständiger Firmenstamm einschließlich Anschrift und Steuerangaben |
 | `geschaeftsjahre_auflisten` | Zeiträume, Versteuerung, Sperren und Zähler |
 | `steuersaetze_auflisten` | Steuerdefinitionen, Konten, UVA und Sperren |
 | `kontenplan_anzeigen` | Konten einschließlich unbebuchter/gesperrter Konten und Vorgaben |
 | `adressen_suchen` | Kunden-/Lieferantenadressen und Statusfilter |
+| `adresse_abrufen` | Vollständige Firmenadresse einschließlich Status und Notizen |
 | `verkaufsbelege_auflisten` | Belegarten, Datums-/Adressfilter und gespeicherte Summen |
 | `verkaufsbeleg_abrufen` | Belegkopf und geordnete Positionen |
+| `einkaufsbelege_auflisten` | Einkaufsbelege mit Belegart-, Datums-, Adress- und Textfilter |
+| `einkaufsbeleg_abrufen` | Einkaufsbelegkopf und geordnete Positionen |
+| `artikel_auflisten` | Artikel und Leistungen mit Lagerkennzeichen und Stammpreisen |
+| `projekte_auflisten` | Projekte, Zeiträume, Notizen und gespeicherter Status |
 | `buchungen_auflisten` | Buchungen mit Datums-, Konto- und Textfilter |
+| `buchung_abrufen` | Vollständiger Buchungskopf und seitenweise Journalzeilen |
 | `offene_posten_auflisten` | Forderungen, Verbindlichkeiten und Gutschriften |
 | `offenen_posten_abrufen` | OP-Kopf, Positionen, Zahlungshistorie und Abgleich |
+| `zahlungen_auflisten` | Zahlungsköpfe mit Datums-, Adress- und Textfilter |
 | `zahlung_abrufen` | Zahlung/Verrechnung mit Belegzuordnungen |
 | `bilanz_und_guv_anzeigen` | Gliederungsbasierte Berichte mit Konten und Vorjahr |
 | `kontoauszug_anzeigen` | Eröffnung, Umsätze, laufende Salden und Steuerschlüssel |
+| `summen_und_salden_anzeigen` | Jährliche Hauptbuchübersicht mit Eröffnung, Umsätzen und Endsalden |
+| `debitoren_salden_anzeigen` | Journal-Soll, -Haben und Salden der Kundenkonten |
+| `kreditoren_salden_anzeigen` | Journal-Soll, -Haben und Salden der Lieferantenkonten |
 | `offene_posten_zum_stichtag_anzeigen` | Rekonstruierte Stichtagssalden und Fälligkeiten |
 | `offene_posten_altersstruktur_anzeigen` | Stichtagssummen nach Seite, Währung und Altersklasse |
 | `steuerjournal_anzeigen` | Steuerjournal einschließlich IST-Versteuerungsnachweisen |
@@ -170,14 +181,64 @@ Synthetische Beispielparameter für `verkaufsbelege_auflisten`:
 `alle`, `aktiv`, `inaktiv`, `gesperrt`. Ein Statusfilter erfordert eine bestimmte
 Rolle. Eine Adresse kann Kunde und Lieferant sein.
 
+`adresse_abrufen` benötigt `firma_id` und `adresse_id`. Das Ergebnis `adresse`
+enthält alle Originalspalten und beide Rollenlabels. Auch inaktive, gesperrte
+und rollenlose Adressen sind abrufbar. Notizen bleiben vollständig erhalten.
+
+`firma_abrufen` benötigt `firma_id` und liefert `firma` mit allen Originalspalten.
+Der Firmenstamm enthält unter anderem Anschrift, Steuerangaben und Kontenplan.
+Geschäftsjahre liefert weiterhin `geschaeftsjahre_auflisten`.
+
+`buchungen_auflisten` bietet zusätzlich `belegnummer`, `konto_soll`, `konto_haben`
+und `kostenstelle`. `belegnummer` sucht wörtlich in `BelegNr`.
+Soll-/Habenkonten wählen Journalzeilen mit einem Betrag ungleich null auf der jeweiligen Seite.
+Negative Stornos bleiben enthalten. `kostenstelle` vergleicht `Kostenstelle1` und
+`Kostenstelle2` exakt. Mehrere Filter gelten gemeinsam für den Buchungskopf.
+Sie müssen nicht dieselbe Journalzeile treffen. Der rohe Buchungsstatus bleibt unverändert.
+
+`verkaufsbelege_auflisten` durchsucht mit `suche` zusätzlich `AuftragsNr`,
+`BestellNr` und `Betreff`. Die Suche ist wörtlich.
+
+`einkaufsbelege_auflisten` liest `BESTELLUNG`. Es gelten die gleichen Datums-,
+Adress- und Entwurfsregeln wie für Verkaufsbelege.
+`suche` durchsucht die Belegnummer, Lieferantenreferenz und den Betreff wörtlich.
+`belegart` filtert gespeicherte Codes. Dokumentiert sind:
+101 Bestellanfrage, 102 Bestellung, 103 Wareneingang, 104 Eingangsrechnung,
+105 Lieferantengutschrift, 106 Rücksendung und 107 Stornierung.
+Unbekannte Codes bleiben unverändert sichtbar.
+`einkaufsbeleg_abrufen` liefert `beleg` und `positionen`.
+`positionen_anzahl`/`positionen_versatz` blättern nur die Positionen.
+FW/SW bleiben getrennt. Text- und Alternativpositionen sind kein pauschal summierbarer Aufwand.
+
+`artikel_auflisten` filtert mit `artikelart`, `nur_lagerartikel` und `warengruppe`.
+Artikelart 1 bezeichnet Artikel, 2 Leistungen. Weitere Codes bleiben roh.
+Die Warengruppe wird exakt verglichen. Gesperrte Artikel bleiben sichtbar.
+Geldfelder sind bereits umgerechnet. Mengen, Gewichte und Prozentsätze bleiben unverändert.
+Das Werkzeug leitet weder eine Preiswährung noch aktuelle Lagerbestände ab.
+
+`projekte_auflisten` liefert Projektstammdaten mit Zeitraum, Notizen und rohem Status.
+Die Liste enthält keine berechneten Projektumsätze, Ergebnisse oder Arbeitszeiten.
+
+`offene_posten_auflisten` filtert mit `datum_von`/`datum_bis` das Belegdatum.
+Die Beträge bleiben die gespeicherten OP-Salden des Datenstands.
+Für historische Salden dient `offene_posten_zum_stichtag_anzeigen`.
+
+`buchung_abrufen` benötigt `firma_id` und `buchung_id`. Das Ergebnis enthält
+`buchung` und `journalzeilen`. Nur die Journalzeilen sind mit
+`journal_anzahl`/`journal_versatz` seitenweise abrufbar.
+Der vollständige Kopf bleibt auf jeder Seite erhalten. Journalreihenfolge:
+`NummerLong`, `Position`, `_rowid`. Vorzeichen, Storno, Steuerschlüssel,
+FW/SW und rohe Statuswerte bleiben erhalten. Keine Buchungssummen aus Teilseiten ableiten.
+
 ## Fachschema und Quellen
 
-23 Tabellen sind fachlich beschrieben:
+27 Tabellen sind fachlich beschrieben:
 `FIRMA`, `ADRESSE`, `AUFTRAG`, `AUFTRAGSPOSITION`, `BUCHUNG`, `JOURNAL`, `POSTEN`,
 `POSTENPOSITION`, `WAEHRUNG`, `KONTO`, `STEUERSATZ`, `WIRTSCHAFTSJAHR`,
 `KONTOSTRUKTUR`, `STRUKTURPOSITION`, `ZAHLUNG`, `ZAHLUNGSPOSITION`, `KOSTENSTELLE`,
 `ZAHLUNGSBEDINGUNG`, `ELSTERMELDUNG`, `ELSTERMELDUNG_NT`, `STEUERERKLAERUNG`,
-`ANLAGE`, `ANLAGENPOSITION`. Andere Tabellen bleiben technisch lesbar.
+`ANLAGE`, `ANLAGENPOSITION`, `BESTELLUNG`, `BESTELLPOSITION`, `ARTIKEL`, `PROJEKT`.
+Andere Tabellen bleiben technisch lesbar.
 
 Begriffsquelle: JSON-API-Hilfe **23.2.0 / 07.07.26** aus dem
 [Connect-Download](https://www.monkey-office.de/download/current/mac/MonKey_Office_Connect.dmg),
@@ -187,6 +248,23 @@ Sie beschreibt Fachstrukturen, nicht interne Tabellen. Lokale Zuordnungen sind a
 Schema/Datenbeziehungen abgeleitet; App-/PDF-Belege gesondert gekennzeichnet.
 Kein Vergleich mit laufendem Connect. Das Fachschema meldet fehlende zugeordnete/
 dokumentierte Spalten, Herkunft und Grenzen. Unbekannte Codes nicht umdeuten.
+
+### Vergleich mit anderen MCP-Servern
+
+Die Lesefunktionen wurden mit diesen GitHub-Projekten verglichen:
+
+- [kustus/MO-Connect-MCP](https://github.com/kustus/MO-Connect-MCP):
+  Firmendetails, Einkaufsbelege, Artikel, Projekte, Debitoren/Kreditoren und Buchungsfilter.
+- [UhlhornHH/monkey-office-mcp](https://github.com/UhlhornHH/monkey-office-mcp):
+  Buchungsdetails sowie Belegnummern- und Soll-/Habenkontenfilter.
+
+Die Umsetzung liest lokale Tabellen und verwendet keinen Fremdcode.
+Ergänzende Begriffsquelle ist die
+[aufbereitete Connect-Referenz 22.1.1](https://github.com/tkaufmann/monkeyoffice-api-docs/tree/main/docs/v22.1.1/endpoints).
+Lokale Zuordnungen zu dieser Referenz sind aus dem Schema abgeleitet.
+Die Buchungs-, Import- und Anhang-Schreibfunktionen werden nicht übernommen.
+Vorlagen zum Anlegen neuer Buchungen sind für den lesenden MCP nicht erforderlich.
+Nicht belegte Festschreibungs- und Zahlungsstatuszuordnungen werden nicht nachgebildet.
 
 ## Berichte, Konten und Geschäftsjahre
 
@@ -214,6 +292,30 @@ Summen und laufende Salden gelten für das volle Jahr unabhängig von der Seite.
 Negativer Saldo bedeutet Haben, positiver Soll. `steuerschluessel` übernimmt
 `JOURNAL.Steuersatz`, auch `-`, Leertext und null. Kein Bankauszug oder Kassennachweis.
 
+`summen_und_salden_anzeigen` benötigt `firma_id` und `jahr`.
+`konto_von`/`konto_bis` begrenzen die effektiven Hauptbuchkonten einschließlich.
+Personenbuchungen zählen einmal im gespeicherten positiven `SammelKonto`,
+sonst im `Konto`. Eröffnungen (`BUCHUNG.Art=2`) bleiben von Umsätzen getrennt.
+Vortragskonten, Konten mit Aktivität und Nullsaldo sowie vorzeichenbehaftete Stornos
+bleiben enthalten. Es gibt keinen Statusfilter.
+Das Ergebnis enthält `konten`, `summen` und `anzahl_konten`.
+Summen gelten für den vollständigen Kontenfilter vor `anzahl`/`versatz`,
+auch bei einer leeren Seite hinter dem Ergebnis.
+Alle Beträge verwenden die SW-Währung des gespeicherten Geschäftsjahres.
+`name` bleibt die gespeicherte Namensvorlage, ohne Platzhalterauflösung.
+Die Liste benötigt keine Abschlussgliederung. Ein Kontenfilter muss nicht ausgeglichen sein.
+
+`debitoren_salden_anzeigen` und `kreditoren_salden_anzeigen` wählen Kunden- bzw.
+Lieferantenkonten aus den gespeicherten Adresszuordnungen.
+Sie summieren Journal-Soll und -Haben im einschließlich gesetzten Datumsbereich.
+Saldo ist Soll minus Haben. Eröffnungen, alle Buchungsstatus und negative Stornos zählen mit.
+Diese Beträge sind weder reine Umsätze noch historische OP-Salden.
+Konten mit mehreren Adressen zählen einmal.
+Ein `adresse_id`-Filter wählt das gesamte zugeordnete Konto, ohne dessen Saldo auf die Adresse aufzuteilen.
+FW-/SW-Währung stammen aus Buchung und Geschäftsjahr.
+Unterschiedliche Währungspaare bleiben getrennt, auch in den Gesamtsummen.
+Fehlende Kontozuordnungen liefern keine erfundenen Nullsalden.
+
 `kontenplan_anzeigen` liefert dagegen Stammdaten mit vollständigen Notizen,
 DATEV-/Währungs-/Sperrfeldern und datierten Steuerzuordnungen. `konto_von`/`konto_bis`
 sind inklusive. `Bezeichnung` ersetzt `#P#`, die Vorlage bleibt erhalten.
@@ -233,6 +335,13 @@ Negative Gutschriften bleiben negativ. Rechnungen sind kein Zahlungs-/Umsatznach
 `zuordnungen`, `zuordnungssummen`, `abgleich`. Positionen und Zahlungen unabhängig mit
 `positionen_anzahl`/`positionen_versatz` bzw. `zahlungen_anzahl`/`zahlungen_versatz` lesen.
 Gesamtabgleich immer über vollständige Historie, Abweichungen nicht korrigieren.
+
+`zahlungen_auflisten` liefert jeden Zahlungskopf genau einmal, auch ohne Zuordnungen.
+Optional filtern `adresse_id`, `datum_von` und `datum_bis`.
+`suche` sucht wörtlich in `ReNr`, `BuText` und `Referenz`.
+Nullverrechnungen und negative Zahlungen bleiben enthalten. `Art` bleibt unverändert.
+FW/SW und verschiedene Währungen nicht addieren. Die lokale `_rowid` führt
+zu `zahlung_abrufen` mit derselben `firma_id`.
 
 `zahlung_abrufen` benötigt `zahlung_id`. Kopf gilt für die gesamte Zahlung,
 Zuordnungen für OP-Positionen. Nur gespeicherte Zahlungs-/Positions-/Posten-IDs,
