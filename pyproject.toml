@@ -1,6 +1,6 @@
 [project]
 name = "mo-local-mcp"
-version = "0.1.0"
+version = "1.0.0"
 description = "Ausschließlich lesender MCP-Zugriff auf feste MonKey-Office-Datenbankstände"
 readme = "README.md"
 license = "MIT"
