@@ -7,6 +7,10 @@
 - Auch die öffentlich angebotenen MCP-Kommandos, ihre Parameter und ihre Beschreibungen erhalten verständliche deutsche Bezeichnungen.
 - Technisch vorgegebene Bezeichner des MCP-Protokolls, externer Bibliotheken und des bestehenden Datenbankschemas bleiben unverändert. Gespeicherte Datenbankwerte werden nicht übersetzt oder umbenannt.
 
+## Commits
+
+- Verwende kurze, einzeilige Commit-Nachrichten auf Deutsch. Ergänze keinen Nachrichtentext unter der Betreffzeile.
+
 ## Dokumentationsstil
 
 - Dokumentation folgt STE80 Lite. Die Sprache bleibt Deutsch.
