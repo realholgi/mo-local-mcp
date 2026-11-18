@@ -130,12 +130,14 @@ Der Projektcode steht unter der [MIT-Lizenz](../LICENSE).
 
 1. Setze die stabile Version in `pyproject.toml`.
 2. Aktualisiere `uv.lock` mit `uv lock`.
-3. Committe beide Dateien zusammen mit den Änderungen.
-4. Erstelle einen Tag `vX.Y.Z`, dessen Nummer genau der Paketversion entspricht.
-5. Pushe den Tag.
+3. Schreibe `docs/releases/vX.Y.Z.md` mit Funktionen, Voraussetzungen, Installation und konkreten Grenzen.
+4. Committe Versionsdateien, Releasehinweise und die weiteren Änderungen.
+5. Erstelle einen Tag `vX.Y.Z`, dessen Nummer genau der Paketversion entspricht.
+6. Pushe den Tag.
 
 Der Tag startet [`.github/workflows/release.yml`](../.github/workflows/release.yml).
 Der Workflow prüft die Version, führt Tests aus und installiert das gebaute Wheel auf macOS.
 Er veröffentlicht genau diese geprüften Pakete mit SHA-256-Prüfsummen als GitHub-Release.
+Die Veröffentlichung verwendet die versionierten Releasehinweise. Fehlende oder leere Hinweise stoppen den Workflow vor den Tests.
 Fehlgeschlagene Prüfungen oder Tags ohne passende stabile Paketversion verhindern die Veröffentlichung.
 Ein normaler Branch-Push startet keine Veröffentlichung.

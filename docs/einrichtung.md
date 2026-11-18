@@ -15,9 +15,19 @@ Die `beispiel.sdb` im Projektordner dient nur der Entwicklung.
 
 ## Installation
 
-Für einen Checkout gilt der [Schnellstart](../README.md#schnellstart).
-Die folgenden Beispiele mit `uv run` beziehen sich auf diesen Checkout.
+Für die Installation ohne Checkout gilt der [Schnellstart](../README.md#schnellstart).
+Die folgenden Beispiele mit `uv run` beziehen sich auf einen Checkout.
 Bei einer Installation als uv-Tool rufst du die Kommandos direkt ohne `uv run` auf.
+
+### Aus dem Quellcode
+
+Führe im Projektordner aus:
+
+```sh
+uv sync --frozen
+uv run mo-schluessel-wiederherstellen
+uv run mo-local-mcp --datenbank /absoluter/pfad/entwicklungsstand.db
+```
 
 ### Versioniertes Paket
 
@@ -26,12 +36,10 @@ Ein erfolgreiches Release enthält ein Wheel, ein Quellpaket und `SHA256SUMS`.
 Es gibt keine automatische Veröffentlichung auf PyPI.
 Lade das Wheel und `SHA256SUMS` aus demselben Release in einen eigenen Ordner.
 
-Die Dateibezeichnung zeigt beispielhaft Version `0.1.0`. Sie bestätigt kein vorhandenes Release.
-
 ```sh
-shasum -a 256 mo_local_mcp-0.1.0-py3-none-any.whl
+shasum -a 256 mo_local_mcp-1.0.0-py3-none-any.whl
 cat SHA256SUMS
-uv tool install --python 3.13 ./mo_local_mcp-0.1.0-py3-none-any.whl
+uv tool install --python 3.13 ./mo_local_mcp-1.0.0-py3-none-any.whl
 mo-local-mcp --hilfe
 ```
 

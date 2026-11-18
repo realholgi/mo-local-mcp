@@ -32,6 +32,7 @@ include = [
   "/tests/*.py",
   "/README.md",
   "/docs/*.md",
+  "/docs/releases/*.md",
   "/LICENSE",
   "/pyproject.toml",
   "/uv.lock",
