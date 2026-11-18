@@ -19,7 +19,6 @@ Fehlerberichte = "https://github.com/realholgi/mo-local-mcp/issues"
 
 [project.scripts]
 mo-local-mcp = "mo_local_mcp.server:main"
-mo-local-connect = "mo_local_mcp.connect:main"
 mo-schluessel-wiederherstellen = "mo_local_mcp.schluessel:main"
 
 [build-system]

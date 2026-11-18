@@ -54,7 +54,6 @@ class ReadAccess:
             "grundlage": "Startoptionen dieses lokalen MCP-Prozesses; keine Änderung an Datenbankrechten.",
             "grenzen": (
                 "Ohne sensible Stammdaten bleiben nur Metadaten und definierte Auswertungen verfügbar. "
-                "Konten-, Gliederungs- und Kostenstellenbezeichnungen in Auswertungen werden nicht anonymisiert. "
-                "Ein separat gestarteter lokaler HTTP-Adapter hat eigene Zugriffsregeln."
+                "Konten-, Gliederungs- und Kostenstellenbezeichnungen in Auswertungen werden nicht anonymisiert."
             ),
         }

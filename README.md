@@ -64,7 +64,7 @@ mo-local-mcp --hilfe
 ```
 
 Vergleiche die Prüfsumme vor der Installation mit dem Eintrag in `SHA256SUMS`.
-`uv tool install` richtet eine eigene Umgebung mit allen drei Kommandos ein.
+`uv tool install` richtet eine eigene Umgebung mit beiden Kommandos ein.
 Falls die Kommandos nicht gefunden werden, führe `uv tool update-shell` aus und öffne eine neue Shell.
 Für MCP-Clients verwende den absoluten Kommandopfad aus `uv tool dir --bin`.
 Die Datenbank und die Schlüsseldatei bleiben außerhalb dieser Umgebung.
@@ -491,7 +491,6 @@ Monatsberichte, Summen-/Saldenliste und Bilanz/GuV verfügbar.
 Konten-, Gliederungs- und Kostenstellenbezeichnungen werden nicht anonymisiert.
 Dieser Modus ist keine allgemeine Anonymisierung von Buchhaltungsdaten.
 Die wirksamen Rechte stehen in `datenbankinformationen.zugriff` und `monkey://zugriff`.
-Ein separat gestarteter lokaler HTTP-Adapter erhält dadurch keine zusätzlichen Beschränkungen.
 Die Startoptionen ändern keine gespeicherten Datenbankrechte.
 
 ## MCP-Ressourcen und Prompts
@@ -638,125 +637,6 @@ MonKey-Datei**. Einfaches Kopieren einer laufend veränderten Hauptdatei reicht 
 - Datenbank, Schlüssel und private Abfrageergebnisse nicht versionieren.
   Nur vertrauenswürdige MCP-Clients/Modellanbieter für Buchhaltungsdaten verwenden.
 
-## Lesender Connect-kompatibler HTTP-Zugang
-
-Zusätzlich zum bestehenden MCP bietet `mo-local-connect` den Endpunkt
-`POST http://127.0.0.1:8084/monkeyOfficeConnectJSON`. Andere MCP-Server können
-ihn statt eines laufenden Connect-Servers ansprechen. Er verwendet denselben
-schreibgeschützten Dateileser, keinen cubeSQL-Server und keine Live-Datenbank.
-Der vorhandene stdio-MCP bleibt unverändert.
-
-### Start und Anmeldung
-
-Eine private UTF-8-Datei mit einem selbst gewählten HTTP-Passwort anlegen,
-Dateirechte `600` setzen und den Adapter starten:
-
-```bash
-uv run mo-local-connect \
-  --datenbank "/Pfad/zum/ruhenden-datenstand.sdb" \
-  --schluesseldatei "$HOME/Library/Application Support/mo-local-mcp/database.key" \
-  --benutzer "lokaler-leser" \
-  --passwortdatei "$HOME/Library/Application Support/mo-local-mcp/connect.passwort"
-```
-
-Alternativ Benutzer und Passwort über `MO_CONNECT_BENUTZER` und
-`MO_CONNECT_PASSWORT` bereitstellen; das Passwort wird nicht als
-Kommandozeilenargument angenommen. `--port` ändert den Standardport `8084`.
-Benutzer und Passwort sind unabhängig von MonKey-Benutzern und dem
-Datenbankschlüssel.
-
-Jeder Aufruf benötigt HTTP Basic Auth und `Content-Type: application/json`.
-Mit `{"firmaList":""}` die verfügbaren Firmen abfragen. Bei allen anderen
-Aufrufen die zurückgegebene `Firma_ID` ausdrücklich als Header `mbl-ident`
-senden. Antworten verwenden `<Methode>Response.ReturnData` und
-`ReturnStatus.Statuscode`; Fehler sind niemals erfolgreiche leere Listen.
-
-Der Server bindet ausschließlich an `127.0.0.1`. Andere Rechner und übliche
-Docker-Netzwerke erreichen ihn nicht direkt. Browserzugriffe mit `Origin`
-werden abgelehnt; es gibt keine CORS-Freigabe. Keine Zugangsdaten, URLs oder
-Nutzdaten werden in HTTP-Zugriffsprotokolle geschrieben.
-
-### Untersuchte MCP-Clients und abgedeckte Aufrufe
-
-Die Implementierung orientiert sich an den tatsächlich gesendeten Payloads aus
-[kustus/MO-Connect-MCP](https://github.com/kustus/MO-Connect-MCP/blob/main/index.js)
-und
-[UhlhornHH/monkey-office-mcp](https://github.com/UhlhornHH/monkey-office-mcp/blob/main/monkey_office_mcp_server.py),
-recherchiert am 17.11.2026. Für die Antwortstrukturen wurde ergänzend die
-[Connect-Referenz 22.1.1](https://github.com/tkaufmann/monkeyoffice-api-docs/blob/main/docs/v22.1.1/llms.txt)
-herangezogen. Die vorhandenen lokalen Fachzuordnungen beruhen weiterhin auf der
-oben genannten Dokumentation 23.2.0 und dem lokalen Schema.
-
-| Bereich | Aufrufe |
-|---|---|
-| Firmen | `firmaList`, `firmaGet` |
-| Buchungen | `buchungList`, `buchungGet`, `buchungFilterTemplate`, `buchungTemplate` |
-| Adressen | `adresseList`, `adresseGet` |
-| Steuern | `steuersatzList` |
-| Belege | `verkaufbelegList`, `verkaufbelegGet`, `einkaufbelegList` |
-| Offene Posten | `offenePostenListDebitoren`, `offenePostenListKreditoren`, `offenePostenGet` |
-| Weitere Stammdaten | `artikelList`, `projektList` |
-| Lokale Client-Erweiterungen | `offenePostenList`, `kostenstellenList`, `buchungKontoList`, `debitorList`, `kreditorList` |
-
-Für kustus `MO_URL` auf den lokalen Endpunkt setzen; `MO_USER` und `MO_PASS`
-müssen der Adapter-Anmeldung entsprechen. `MO_FIRMA_KEY` ist die lokale
-`Firma_ID` aus `firmaList`, nicht eine früher verwendete Connect-Kennung.
-Bei Uhlhorn entsprechend `MONKEY_API_URL`, `MONKEY_API_USER`,
-`MONKEY_API_PASS` und `MONKEY_FIRMA_NAME` konfigurieren. Letzteres muss exakt
-der `Bezeichnung` aus `firmaList` entsprechen.
-
-Die Client-Erweiterungen sind keine Zusage, dass diese Methodennamen beim
-Hersteller existieren. Kostenstellen, Konten sowie Debitoren-/Kreditorenlisten
-kennzeichnen ihre abweichende Bedeutung mit `LokaleLeseerweiterung` und `Basis`.
-`offenePostenList` vereinigt die beiden OP-Seiten im dokumentierten
-`OffenePostenListItem`-Format.
-
-### Bewusste Kompatibilitätsgrenzen
-
-- Kein vollständiger Connect-Ersatz und kein Vergleich mit laufendem Connect.
-  Geprüft sind die lokalen Verträge und ausgewählte originale
-  HTTP-/Auswertefunktionen beider Clients, nicht deren vollständiger MCP-Betrieb.
-- Alle IDs sind lokale Ersatz-IDs als Zeichenketten. Alte Connect-IDs und
-  `VersionKey` werden weder übernommen noch erfunden. Nur belegte Felder werden
-  abgebildet; fehlende Felder sind keine bestätigten leeren Werte.
-- Ohne Datumsfilter wird der gesamte Datenstand betrachtet, nicht automatisch
-  das aktive Geschäftsjahr. Datumsgrenzen sind einschließlich.
-- `FestschreibStatus=4` funktioniert; `1` und `2` werden abgelehnt, weil die lokale
-  Statuszuordnung nicht verifiziert ist. `FestschreibStatus` im Buchungsdetail
-  ist `null`; `LokalStatus` bewahrt den rohen lokalen Wert.
-- Buchungsjournale erhalten gespeicherte Steuer-Schlüsselzeichenketten statt
-  einer erfundenen numerischen Steuer-ID. `LokalStorno` und
-  `LokalOSSProzent` sind lokale Zusatzfelder. Nicht belegte OSS-Steuersatz- und
-  Attachment-Zuordnungen werden nicht vorgetäuscht.
-- Beleg-Zahlungsstatus wird nur über die firmengebundene gespeicherte
-  OP-Verknüpfung bestimmt. Verwaiste Verknüpfungen verhindern die Auswertung
-  ausdrücklich. Rechnungsart allein beweist keine offene Zahlung.
-- `debitorList`/`kreditorList` summieren aktuell gespeicherte OP-Restbeträge nach
-  Adresse und Währung. Datumsfilter begrenzen das Belegdatum, nicht einen
-  historischen Zahlungsstand. Gutschriften behalten ihr Vorzeichen;
-  FW und SW bleiben getrennt.
-- Nicht benötigte offizielle Filter, etwa OP-Filter `OpDatum`, `BetragVon`,
-  `BetragBis` und `Zahlungsart`, werden ausdrücklich abgelehnt. Unbekannte
-  Parameter werden nicht stillschweigend ignoriert.
-- Maximal 500 Ergebniszeilen je Abfrage, ungefähr eine Million Ausgabezeichen
-  und 100.000 Anfragebytes. Bei Überschreitung erfolgt ein Fehler statt einer
-  unmarkiert gekürzten Liste; Filter enger setzen. Keine automatische Pagination.
-- Schreibende und ausführende Aufrufe wie `buchungAdd`, Anhänge hinzufügen,
-  Ändern, Löschen, Weiterleiten und Drucken sind gesperrt. Eine Buchungsvorlage
-  erlaubt keine anschließende Buchung.
-
-Die unveränderte Originaldatenbank bleibt ausschließlich lesend geöffnet.
-Auch der HTTP-Zugang erfordert einen geschlossenen, ruhenden und konsistenten
-Datenstand gemäß den obigen Schutzregeln.
-
-### Abgrenzung zum Herstellerprodukt
-
-Laut [Hersteller](https://www.monkey-office.de/products/officeconnect/index.php)
-benötigt reguläres Connect HTTP(S)/JSON-Zugriff auf eine MonKey-Datenbank auf
-cubeSQL, eine passende Hauptversion und eine persönliche Lizenznummer;
-die Connect-Registrierung ist kostenlos. Das ist eine separate Anbindung.
-Hier wurde das Herstellerprodukt weder installiert noch aktiviert.
-
 ## Verschlüsselungsprofil
 
 Untersuchte Programmversion 23.2.4,
@@ -789,12 +669,12 @@ Zahlungsverknüpfungen, unvollständige Historien und gespeicherte Anlagenpläne
 Die deutsche Darstellung prüft zusätzlich unveränderte gespeicherte Werte,
 freie SQL-Aliase, Binärwerte und konsistente Status-/Geldspalten.
 
-Die 273 Tests prüfen auch Vorjahresabweichungen, Berichtsnachweise, Kontenabstimmung
+Die Tests prüfen auch Vorjahresabweichungen, Berichtsnachweise, Kontenabstimmung
 und strukturierte Fehlercodes mit synthetischen Daten.
 Ein neu gestarteter stdio-MCP wurde zusätzlich mit einem synthetischen verschlüsselten Datenstand geprüft.
 Der Aufruf bestätigte Vorjahresabweichung, Ergebnisnachweis und strukturierten Firmenzugriffsfehler.
 Die synthetische Datenbank blieb unverändert. Für diese Prüfungen wurde keine Ursprungsdatenbank geöffnet.
-Quellpaket und Wheel wurden gebaut. Alle drei installierten CLI-Kommandos wurden mit `--hilfe` gestartet.
+Quellpaket und Wheel wurden gebaut. Beide installierten CLI-Kommandos wurden mit `--hilfe` gestartet.
 
 ### GitHub Actions
 
@@ -802,7 +682,7 @@ Der Workflow `.github/workflows/ci.yml` startet bei Push, Pull Request oder manu
 Die Tests laufen unter Linux (`ubuntu-latest`) mit Python 3.13 und 3.14.
 Nach erfolgreichen Tests baut ein macOS-Job das Quellpaket und daraus das Wheel.
 Dieser Job verwendet den ARM64-Runner `macos-latest`.
-Er installiert das Wheel in einer eigenen Umgebung und prüft alle drei CLI-Einstiegspunkte mit `--hilfe`.
+Er installiert das Wheel in einer eigenen Umgebung und prüft beide CLI-Einstiegspunkte mit `--hilfe`.
 Die Pakete bleiben sieben Tage als CI-Artefakte verfügbar.
 Der Workflow veröffentlicht keine Pakete auf PyPI.
 
