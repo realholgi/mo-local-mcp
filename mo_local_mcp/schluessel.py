@@ -2,7 +2,7 @@
 """Den beobachteten Standardschlüssel aus der installierten MonKey-Office-Version wiederherstellen.
 
 Es wird kein Anwendungscode ausgeführt, keine Herstellerprogrammdatei kopiert und kein Schlüssel ausgegeben.
-Der Hash der exakten Programmdatei sperrt die Wiederherstellung für andere Anwendungsversionen.
+Unbekannte Programmdateien erfordern einen bekannten Konstantenaufbau und eine passende Datenbank.
 """
 
 from mo_local_mcp.kommandozeile import DeutscherArgumentParser
@@ -13,6 +13,11 @@ import mmap
 from pathlib import Path
 import os
 import struct
+import tempfile
+
+import apsw
+
+from mo_local_mcp.database import OfficeDatabase
 
 
 STANDARD_PROGRAMMDATEI = Path("/Applications/MonKey Office 2026.app/Contents/MacOS/MonKey Office 2026")
@@ -122,34 +127,127 @@ def _dateiversatz(zeiger, segmente, laenge):
     raise ValueError("Zeiger liegt außerhalb dateigestützter Mach-O-Segmente")
 
 
-def schluessel_wiederherstellen(programmdatei):
-    """Wählt das Hashprofil, liest die ARM64-Zeichenkonstanten und dekodiert 32 Schlüsselbytes."""
+def _arm64_bereich(daten):
+    if len(daten) < MACH_HEADER_64.size:
+        raise ValueError("Unvollständige Programmdatei")
+    if daten[:4] == struct.pack("<I", MH_MAGIC_64):
+        if MACH_HEADER_64.unpack_from(daten)[1] != CPU_TYPE_ARM64:
+            raise ValueError("Kein ARM64-Teil vorhanden")
+        return 0, len(daten)
+    magic, anzahl = FAT_HEADER.unpack_from(daten)
+    if magic != 0xCAFEBABE or FAT_HEADER.size + anzahl * FAT_ARCH.size > len(daten):
+        raise ValueError("Ungültige Universal-Mach-O-Datei")
+    for index in range(anzahl):
+        cpu, _, offset, groesse, _ = FAT_ARCH.unpack_from(daten, FAT_HEADER.size + index * FAT_ARCH.size)
+        if cpu == CPU_TYPE_ARM64:
+            return offset, groesse
+    raise ValueError("Kein ARM64-Teil vorhanden")
+
+
+def _profil_lesen(daten, arm_offset, segmente, profil, tabellen_offset):
+    laenge = max(profil.zeichenindizes) * profil.eintrag_groesse + profil.zeiger_offset + ZEIGER_64.size
+    if not any(fileoff <= tabellen_offset and tabellen_offset + laenge <= fileoff + filesize
+               for _, fileoff, filesize in segmente):
+        raise ValueError("Konstantentabelle liegt außerhalb dateigestützter Mach-O-Segmente")
+    zeichen = bytearray()
+    for index in range(max(profil.zeichenindizes) + 1):
+        position = arm_offset + tabellen_offset + profil.eintrag_groesse * index + profil.zeiger_offset
+        zeiger = ZEIGER_64.unpack_from(daten, position)[0]
+        position = arm_offset + _dateiversatz(zeiger, segmente, 2)
+        if daten[position] != profil.zeichen_marker:
+            raise ValueError("Unerwarteter Aufbau der kompilierten Zeichenkette")
+        zeichen.append(daten[position + 1])
+    kodiert = bytes(zeichen[index] for index in profil.zeichenindizes)
+    schluessel = base64.b64decode(kodiert, validate=True)
+    if len(schluessel) != SCHLUESSELLAENGE or base64.b64encode(schluessel) != kodiert:
+        raise ValueError("Unerwartete Länge oder nicht kanonische Base64-Kodierung des Schlüssels")
+    return schluessel
+
+
+def _kandidaten(daten, arm_offset, segmente):
+    """Findet bekannte Tabellenmuster über den Zeiger auf das Base64-Endzeichen."""
+    muster = {
+        (profil.eintrag_groesse, profil.zeiger_offset, profil.zeichen_marker, profil.zeichenindizes): profil
+        for profil in PROFILE.values()
+    }
+    gefunden = set()
+    for profil in muster.values():
+        # 32 Schlüsselbytes ergeben 44 Base64-Zeichen mit genau einem abschließenden '='.
+        if len(profil.zeichenindizes) != 44:
+            continue
+        zeiger = set()
+        for vmaddr, fileoff, filesize in segmente:
+            position = arm_offset + fileoff
+            ende = position + filesize
+            while (position := daten.find(bytes((profil.zeichen_marker, ord("="))), position, ende)) != -1:
+                zeiger.add(vmaddr + position - arm_offset - fileoff)
+                position += 2
+        if not zeiger:
+            continue
+        positionen = []
+        with memoryview(daten) as ansicht:
+            for _, fileoff, filesize in segmente:
+                # Alle acht Ausrichtungen erhalten auch ungerade Tabellenpositionen.
+                for ausrichtung in range(min(8, filesize)):
+                    start = arm_offset + fileoff + ausrichtung
+                    ende = start + (filesize - ausrichtung) // 8 * 8
+                    with ansicht[start:ende] as bereich:
+                        positionen.extend(
+                            start + index * 8 - arm_offset
+                            for index, (wert,) in enumerate(ZEIGER_64.iter_unpack(bereich))
+                            if wert in zeiger
+                        )
+        for position in positionen:
+            tabellen_offset = (position - profil.zeiger_offset
+                               - profil.zeichenindizes[-1] * profil.eintrag_groesse)
+            try:
+                kandidat = _profil_lesen(daten, arm_offset, segmente, profil, tabellen_offset)
+            except ValueError:
+                continue
+            if kandidat not in gefunden:
+                gefunden.add(kandidat)
+                yield kandidat
+
+
+def _datenbank_pruefen(datenbank, schluessel):
+    """Prüft das Schema mit dem vorhandenen Nur-Lese-Zugriff und einer kurzlebigen privaten Schlüsseldatei."""
+    with tempfile.TemporaryDirectory(prefix="mo-schluessel-") as verzeichnis:
+        pfad = Path(verzeichnis) / "database.key"
+        with open(pfad, "xb", opener=lambda name, flags: os.open(name, flags, 0o600)) as datei:
+            datei.write(schluessel)
+        try:
+            quelle = OfficeDatabase(datenbank, pfad)
+        except (apsw.NotADBError, apsw.CorruptError):
+            return False
+        quelle.close()
+        return True
+
+
+def schluessel_wiederherstellen(programmdatei, datenbank=None):
+    """Liest bekannte Hashprofile oder sucht bekannte Muster mit anschließender Datenbankprüfung."""
     with Path(programmdatei).open("rb") as quelle:
         profil = PROFILE.get(hashlib.file_digest(quelle, "sha256").hexdigest())
-        if profil is None:
-            versionen = ", ".join(eintrag.version for eintrag in PROFILE.values())
-            raise ValueError(f"Nicht unterstützte Programmdatei. Erfasste Versionen: {versionen}")
+        if profil is None and datenbank is None:
+            raise ValueError("Nicht unterstützte Programmdatei. Für die Mustersuche --datenbank angeben")
+        if os.fstat(quelle.fileno()).st_size == 0:
+            raise ValueError("Leere Programmdatei")
         with mmap.mmap(quelle.fileno(), 0, access=mmap.ACCESS_READ) as daten:
-            _, anzahl = FAT_HEADER.unpack_from(daten)
-            architekturen = [
-                FAT_ARCH.unpack_from(daten, FAT_HEADER.size + FAT_ARCH.size * index)
-                for index in range(anzahl)
-            ]
-            arm_offset, arm_groesse = next((architektur[2], architektur[3]) for architektur in architekturen if architektur[0] == CPU_TYPE_ARM64)
+            arm_offset, arm_groesse = _arm64_bereich(daten)
             segmente = _segmente(daten, arm_offset, arm_groesse)
-            zeichen = []
-            for index in range(max(profil.zeichenindizes) + 1):
-                position = arm_offset + profil.konstanten_offset + profil.eintrag_groesse * index + profil.zeiger_offset
-                zeiger = ZEIGER_64.unpack_from(daten, position)[0]
-                position = arm_offset + _dateiversatz(zeiger, segmente, 2)
-                if daten[position] != profil.zeichen_marker:
-                    raise ValueError("Unerwarteter Aufbau der kompilierten Zeichenkette")
-                zeichen.append(bytes(daten[position + 1:position + 2]))
-            base64_zeichen = b"".join(zeichen[index] for index in profil.zeichenindizes)
-            schluessel = base64.b64decode(base64_zeichen, validate=True)
-            if len(schluessel) != SCHLUESSELLAENGE:
-                raise ValueError("Unerwartete Länge des wiederhergestellten Schlüssels")
-            return schluessel
+            if profil is not None:
+                schluessel = _profil_lesen(daten, arm_offset, segmente, profil, profil.konstanten_offset)
+                if datenbank is not None and not _datenbank_pruefen(datenbank, schluessel):
+                    raise ValueError("Der wiederhergestellte Schlüssel passt nicht zur Datenbank")
+                return schluessel
+            passend = None
+            for kandidat in _kandidaten(daten, arm_offset, segmente):
+                if _datenbank_pruefen(datenbank, kandidat):
+                    if passend is not None:
+                        raise ValueError("Mehrere passende Schlüssel gefunden; Programmdatei ist nicht eindeutig")
+                    passend = kandidat
+            if passend is None:
+                raise ValueError("Kein bekanntes Konstantenmuster mit passendem Datenbankschlüssel gefunden")
+            return passend
 
 
 def main():
@@ -158,10 +256,12 @@ def main():
     parser.add_argument("--programmdatei", type=Path, default=STANDARD_PROGRAMMDATEI,
                         help=f"Pfad zur Programmdatei; Standard: {STANDARD_PROGRAMMDATEI}")
     parser.add_argument("--ausgabe", type=Path, default=Path.home() / "Library/Application Support/mo-local-mcp/database.key", help="Zielpfad der privaten Schlüsseldatei")
+    parser.add_argument("--datenbank", type=Path,
+                        help="Ruhender verschlüsselter Datenbankstand zur lesenden Schlüsselprüfung; bei unbekannter Programmdatei erforderlich")
     argumente = parser.parse_args()
     if not argumente.programmdatei.is_file():
         parser.error(f"Programmdatei nicht gefunden: {argumente.programmdatei}; --programmdatei angeben")
-    schluessel = schluessel_wiederherstellen(argumente.programmdatei)
+    schluessel = schluessel_wiederherstellen(argumente.programmdatei, argumente.datenbank)
     argumente.ausgabe.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     try:
         fd = os.open(argumente.ausgabe, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)

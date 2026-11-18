@@ -74,7 +74,10 @@ Diese exakten Programmversionen sind über ihren Datei-Hash erfasst:
 | MonKey Office 2026 | 23.0.2, 23.1.0, 23.2.4 |
 
 Der SHA-256 der ausführbaren Datei bestimmt das Profil, nicht der App-Name.
-Unbekannte Dateien werden abgelehnt.
+Für unbekannte Dateien sucht das Werkzeug den bekannten Konstantenaufbau ohne feste Tabellenposition.
+Dazu ist `--datenbank` mit einem ruhenden verschlüsselten Datenbankstand erforderlich.
+Nur ein eindeutiger Schlüssel, mit dem sich das Datenbankschema lesen lässt, wird gespeichert.
+Die Datenbank bleibt schreibgeschützt. Ein WAL oder Journal mit Inhalt wird abgelehnt.
 Ohne `--programmdatei` gilt dieser Standardpfad:
 
 `/Applications/MonKey Office 2026.app/Contents/MacOS/MonKey Office 2026`
@@ -94,6 +97,18 @@ uv run mo-schluessel-wiederherstellen \
 uv run mo-local-mcp --datenbank /absoluter/pfad/entwicklungsstand.db \
   --schluesseldatei /privater/pfad/datenbank.key
 ```
+
+Bei einer unbekannten Programmversion ergänze die Datenbank zur Schlüsselprüfung:
+
+```sh
+uv run mo-schluessel-wiederherstellen \
+  --programmdatei "/pfad/zur/MonKey Office.app/Contents/MacOS/MonKey Office" \
+  --datenbank /absoluter/pfad/entwicklungsstand.db \
+  --ausgabe /privater/pfad/datenbank.key
+```
+
+`--datenbank` prüft auch Schlüssel aus bekannten Hashprofilen, wenn du die Option angibst.
+Geänderte Zeichenreihenfolgen, Tabellenformate oder Verschlüsselungsverfahren erfordern weiterhin eine Anpassung am Leser.
 
 Archive an anderen Orten benötigen den Pfad zur ausführbaren Datei:
 

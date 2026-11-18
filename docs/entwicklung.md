@@ -27,6 +27,36 @@ Er liest 64-Bit-Little-Endian-Zeiger und einzelne Base64-Zeichen.
 Zeiger auf `__PAGEZERO`, Zero-Fill-Bereiche oder über das Segmentende hinaus werden abgelehnt.
 Ein anderes Datei- oder Ableitungsformat erfordert eine Änderung am Leser.
 
+### Offsetfreie Mustersuche
+
+Bei unbekanntem Datei-Hash sucht der Leser die Tabellenmuster aus `PROFILE`.
+Dabei verwendet er Eintragsgröße, Zeigerposition, Zeichenmarker und Zeichenindizes.
+Die feste Tabellenposition und Versionsbezeichnung werden nicht benötigt.
+Die Suche unterstützt Universal-Mach-O-Dateien und einzelne ARM64-Mach-O-Dateien.
+
+32 Schlüsselbytes ergeben 44 Base64-Zeichen mit einem abschließenden `=`.
+Der Leser sucht dateigestützte Zeichenkonstanten für dieses Endzeichen.
+Über ihre Zeiger und den bekannten Zeichenindex bestimmt er mögliche Tabellenanfänge.
+Die Zeigersuche liest 64-Bit-Werte ohne Kopie über alle acht Byte-Ausrichtungen.
+Ein Mengenvergleich ersetzt den langsamen regulären Ausdruck mit vielen Zeigeralternativen.
+Er prüft alle Tabellenzeiger, Zeichenmarker, die Schlüssellänge und die kanonische Base64-Kodierung.
+
+Für diese Suche ist `--datenbank` erforderlich.
+Jeden unterschiedlichen Kandidaten prüft `OfficeDatabase` durch lesenden Zugriff auf `sqlite_schema`.
+Dazu wird kurzzeitig eine Schlüsseldatei mit Rechten `0600` in einem privaten temporären Verzeichnis angelegt.
+Das Verzeichnis wird auch bei Fehlern entfernt.
+Erst nach genau einem passenden Kandidaten speichert das CLI die Ausgabedatei.
+Mehrere passende 32-Byte-Schlüssel werden abgelehnt, auch wenn ihre ersten 16 Bytes übereinstimmen.
+
+Die Suche erkennt bekannte Konstantenaufbauten an neuen Positionen, keine beliebigen Ableitungsroutinen.
+Neue Zeichenreihenfolgen oder Tabellenformate benötigen weiterhin ein passendes Muster.
+Die Datenbankprüfung bestätigt das unterstützte Verschlüsselungsprofil, nicht die Unversehrtheit aller Geschäftsdaten.
+
+Die Mustersuche wurde mit MonKey Office 2024 21.4.3 (Build 21.4.3.3.191) geprüft.
+Ohne neues Hashprofil fand und bestätigte das CLI den Schlüssel in rund zehn Sekunden.
+Die App wurde nicht gestartet. Größe und Änderungszeiten der Entwicklungsdatenbank blieben unverändert.
+Die temporäre Schlüsseldatei hatte Rechte `0600` und wurde nach der Prüfung entfernt.
+
 ## Verschlüsselungsprofil
 
 Die statische Symbol- und ARM64-Analyse untersuchte unter anderem Programmversion 23.2.4:
