@@ -1,0 +1,67 @@
+name: Versionierte Veröffentlichung
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: veroeffentlichung-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: Tag und Paketversion abgleichen
+    runs-on: ubuntu-latest
+    steps:
+      - name: Quellcode auschecken
+        uses: actions/checkout@v7.0.1
+      - name: Tag prüfen
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          import tomllib
+          from pathlib import Path
+
+          version = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
+          tag = os.environ["RELEASE_TAG"]
+          if not re.fullmatch(r"\d+\.\d+\.\d+", version) or tag != f"v{version}":
+              raise SystemExit("Tag und stabile Paketversion stimmen nicht überein")
+          PY
+
+  pruefung:
+    name: Tests und installierbare Pakete
+    needs: version
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  veroeffentlichung:
+    name: Geprüfte Pakete veröffentlichen
+    needs: pruefung
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Geprüfte Pakete herunterladen
+        uses: actions/download-artifact@v8.0.1
+        with:
+          name: mo-local-mcp-pakete
+          path: dist
+      - name: Prüfsummen erzeugen
+        working-directory: dist
+        run: sha256sum -- *.whl *.tar.gz > SHA256SUMS
+      - name: GitHub-Release mit Paketen erstellen
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$RELEASE_TAG" --verify-tag --title "$RELEASE_TAG" \
+            --generate-notes dist/*.whl dist/*.tar.gz dist/SHA256SUMS

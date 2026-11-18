@@ -5,6 +5,7 @@ from datetime import date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
 from .business import _integer
+from .errors import Abfragegrenze, DatenFehler, ParameterFehler
 
 
 ZERO = Decimal(0)
@@ -28,7 +29,7 @@ class StatementReader:
             if not result["truncated"]:
                 return rows
             if not result["rows"]:
-                raise ValueError("Eine Berichtsquellzeile überschreitet die Ausgabegrenze der Abfrage")
+                raise Abfragegrenze("Eine Berichtsquellzeile überschreitet die Ausgabegrenze der Abfrage")
             offset += len(result["rows"])
 
     def _fiscal_year(self, company_id, year):
@@ -38,7 +39,7 @@ class StatementReader:
             [company_id, str(year)],
         )
         if len(rows) != 1:
-            raise ValueError("Für diese Firma wird genau ein Wirtschaftsjahr mit Beginn im angefragten Jahr erwartet")
+            raise DatenFehler("Für diese Firma wird genau ein Wirtschaftsjahr mit Beginn im angefragten Jahr erwartet")
         return rows[0]
 
     def account_statement(self, company_id, year, account, limit=100, offset=0):
@@ -48,14 +49,14 @@ class StatementReader:
         _integer(limit, "anzahl")
         _integer(offset, "versatz", 0)
         if year > 9999 or limit > 500:
-            raise ValueError("jahr darf höchstens 9999 und anzahl höchstens 500 sein")
+            raise ParameterFehler("jahr darf höchstens 9999 und anzahl höchstens 500 sein")
         period = self._fiscal_year(company_id, year)
         definitions = self._rows(
             "SELECT Nummer, Bezeichnung FROM KONTO WHERE Firma_id=? AND Nummer=? ORDER BY Nummer",
             [company_id, account],
         )
         if len(definitions) != 1:
-            raise ValueError("Genau eine Kontendefinition in dieser Firma erwartet")
+            raise DatenFehler("Genau eine Kontendefinition in dieser Firma erwartet")
         ledger = (
             "SELECT b.Datum AS date, b.BelegNr AS document_number, j.Text AS text, "
             "j.GegenKonto AS contra_account, j.Nummer AS journal_number, j.Steuersatz AS tax_code, "
@@ -95,7 +96,7 @@ class StatementReader:
             [*bindings, str(opening_balance), offset], limit,
         )
         if result["truncated"] and not result["rows"]:
-            raise ValueError("Eine Kontoauszugszeile überschreitet die Ausgabegrenze der Abfrage")
+            raise Abfragegrenze("Eine Kontoauszugszeile überschreitet die Ausgabegrenze der Abfrage")
         entries = []
         for values in result["rows"]:
             entry = dict(zip(result["columns"], values))
@@ -138,12 +139,12 @@ class StatementReader:
         _integer(limit, "anzahl")
         _integer(offset, "versatz", 0)
         if year > 9999 or limit > 500:
-            raise ValueError("jahr darf höchstens 9999 und anzahl höchstens 500 sein")
+            raise ParameterFehler("jahr darf höchstens 9999 und anzahl höchstens 500 sein")
         for value, name in ((account_from, "konto_von"), (account_to, "konto_bis")):
             if value is not None:
                 _integer(value, name, 0)
         if account_from is not None and account_to is not None and account_from > account_to:
-            raise ValueError("konto_von darf konto_bis nicht überschreiten")
+            raise ParameterFehler("konto_von darf konto_bis nicht überschreiten")
         period = self._fiscal_year(company_id, year)
         effective_account = "CASE WHEN j.SammelKonto>0 THEN j.SammelKonto ELSE j.Konto END"
         journal_filter = ""
@@ -188,7 +189,7 @@ class StatementReader:
         for index, group in enumerate(groups):
             names = definitions[group["account"]]
             if len(names) != 1:
-                raise ValueError("Genau eine Kontendefinition in dieser Firma erwartet")
+                raise DatenFehler("Genau eine Kontendefinition in dieser Firma erwartet")
             values = [
                 Decimal(str(group[field]))
                 for field in ("opening_debit", "opening_credit", "movement_debit", "movement_credit")
@@ -221,10 +222,10 @@ class StatementReader:
         ids = [row["_rowid"] for row in structures]
         if structure_id is None:
             if len(ids) != 1:
-                raise ValueError(f"gliederung_id ausdrücklich aus den Gliederungen dieser Firma wählen: {ids}")
+                raise ParameterFehler(f"gliederung_id ausdrücklich aus den Gliederungen dieser Firma wählen: {ids}")
             structure_id = ids[0]
         elif structure_id not in ids:
-            raise ValueError("Berichtsgliederung in dieser Firma nicht gefunden")
+            raise ParameterFehler("Berichtsgliederung in dieser Firma nicht gefunden")
         positions = self._rows(
             "SELECT ItemId, ParentId, VzWechsel, Bezeichnung, Kontoliste, Struktur "
             "FROM STRUKTURPOSITION WHERE Firma_id=? AND Ks_id=? ORDER BY ItemId",
@@ -237,16 +238,16 @@ class StatementReader:
             item_id = row["ItemId"]
             side = row["Struktur"]
             if item_id in nodes or side not in {"A", "P", "G", "B"}:
-                raise ValueError("Nicht unterstützte oder doppelte Gliederungsposition")
+                raise DatenFehler("Nicht unterstützte oder doppelte Gliederungsposition")
             accounts = []
             for token in (row["Kontoliste"] or "").split(","):
                 token = token.strip()
                 if token:
                     if not token.isdecimal():
-                        raise ValueError(f"Nicht unterstützter Kontenlistenausdruck in Berichtsposition {item_id}")
+                        raise DatenFehler(f"Nicht unterstützter Kontenlistenausdruck in Berichtsposition {item_id}")
                     accounts.append(int(token))
             if side == "B" and accounts:
-                raise ValueError("Die Jahresergebnisposition darf nicht zusätzlich Konten auflisten")
+                raise DatenFehler("Die Jahresergebnisposition darf nicht zusätzlich Konten auflisten")
             nodes[item_id] = row
             children[row["ParentId"]].append(item_id)
             for account in accounts:
@@ -255,26 +256,26 @@ class StatementReader:
         for side in ("A", "P", "G"):
             matches = [i for i in children[0] if nodes[i]["Struktur"] == side]
             if len(matches) != 1:
-                raise ValueError("Eine vollständige Bilanz-/GuV-Gliederung mit je einer Wurzel A, P und G ist erforderlich")
+                raise DatenFehler("Eine vollständige Bilanz-/GuV-Gliederung mit je einer Wurzel A, P und G ist erforderlich")
             roots[side] = matches[0]
         visited = set()
 
         def validate(item_id, parent_side):
             if item_id in visited:
-                raise ValueError("Zyklische Berichtshierarchie")
+                raise DatenFehler("Zyklische Berichtshierarchie")
             visited.add(item_id)
             node = nodes[item_id]
             if node["Struktur"] not in ({"P", "B"} if parent_side == "P" else {parent_side}):
-                raise ValueError("Nicht unterstützte Mischung von Berichtsabschnitten")
+                raise DatenFehler("Nicht unterstützte Mischung von Berichtsabschnitten")
             for child in children[item_id]:
                 validate(child, parent_side)
 
         for side, root in roots.items():
             validate(root, side)
         if len(visited) != len(nodes):
-            raise ValueError("In der Berichtshierarchie fehlen übergeordnete Positionen oder es gibt nicht unterstützte Wurzeln")
+            raise DatenFehler("In der Berichtshierarchie fehlen übergeordnete Positionen oder es gibt nicht unterstützte Wurzeln")
         if sum(node["Struktur"] == "B" for node in nodes.values()) != 1:
-            raise ValueError("Genau eine eingebettete Jahresergebnisposition ist erforderlich")
+            raise DatenFehler("Genau eine eingebettete Jahresergebnisposition ist erforderlich")
         return structure_id, nodes, children, assignments, roots
 
     def _balances(self, company_id, period):
@@ -304,10 +305,10 @@ class StatementReader:
                 continue
             account = row["account"]
             if row["type"] is None:
-                raise ValueError(f"Für Konto {account} fehlt die Kontendefinition dieser Firma")
+                raise DatenFehler(f"Für Konto {account} fehlt die Kontendefinition dieser Firma")
             candidates = assignments.get(account, {})
             if candidates.get("G") and (candidates.get("A") or candidates.get("P")):
-                raise ValueError(f"Konto {account} ist mehrdeutig Bilanz und GuV zugeordnet")
+                raise DatenFehler(f"Konto {account} ist mehrdeutig Bilanz und GuV zugeordnet")
             if candidates.get("G"):
                 selected = candidates["G"]
             elif candidates.get("A") and candidates.get("P"):
@@ -319,7 +320,7 @@ class StatementReader:
                 if not selected and str(row["type"]).startswith("3"):
                     controls += balance
                     continue
-                raise ValueError(f"Für Konto {account} mit Saldo ungleich null fehlt die Berichtszuordnung oder sie ist mehrdeutig")
+                raise DatenFehler(f"Für Konto {account} mit Saldo ungleich null fehlt die Berichtszuordnung oder sie ist mehrdeutig")
             item_id = selected[0]
             node = nodes[item_id]
             signed = -balance if node["Struktur"] == "P" else balance
@@ -328,7 +329,7 @@ class StatementReader:
             own[item_id] += signed
             accounts[item_id][account] = {"name": row["name"], "amount": signed}
         if _money(journal_difference) != "0.00" or _money(controls) != "0.00":
-            raise ValueError("Journal oder ausgeschlossene Vortragskonten sind nicht ausgeglichen")
+            raise DatenFehler("Journal oder ausgeschlossene Vortragskonten sind nicht ausgeglichen")
         totals = {}
 
         def total(item_id):
@@ -343,14 +344,123 @@ class StatementReader:
         for root in (roots["A"], roots["P"]):
             total(root)
         if _money(totals[roots["A"]]) != _money(totals[roots["P"]]):
-            raise ValueError("Die rekonstruierte Bilanz ist nicht ausgeglichen; Berichtsgliederung prüfen")
+            raise DatenFehler("Die rekonstruierte Bilanz ist nicht ausgeglichen; Berichtsgliederung prüfen")
         return totals, accounts, annual_result
+
+    def statement_evidence(self, company_id, year, structure_id, item_id, account=None, limit=100, offset=0):
+        """Positionsbeiträge aus derselben Berechnung wie Bilanz/GuV bis ins Journal nachweisen."""
+        _integer(company_id, "firma_id")
+        _integer(year, "jahr")
+        _integer(structure_id, "gliederung_id")
+        _integer(item_id, "positions_id")
+        _integer(limit, "anzahl")
+        _integer(offset, "versatz", 0)
+        if year > 9999 or limit > 500:
+            raise ParameterFehler("jahr darf höchstens 9999 und anzahl höchstens 500 sein")
+        if account is not None:
+            _integer(account, "konto", 0)
+        period = self._fiscal_year(company_id, year)
+        structure_id, nodes, children, assignments, roots = self._layout(company_id, structure_id)
+        if item_id not in nodes:
+            raise ParameterFehler("Berichtsposition in dieser Firmengliederung nicht gefunden")
+        totals, accounts, annual_result = self._calculate(
+            company_id, period, nodes, children, assignments, roots
+        )
+        routes = {}
+
+        def collect(position_id, path, factor=1, result_position_id=None):
+            node = nodes[position_id]
+            path = [*path, position_id]
+            sign = (-1 if node["Struktur"] == "P" else 1) * (-1 if node["VzWechsel"] else 1)
+            for number, values in accounts.get(position_id, {}).items():
+                if number in routes:
+                    raise DatenFehler("Ein Konto würde im Positionsnachweis mehrfach gezählt")
+                routes[number] = {
+                    "source_item_id": position_id, "position_path": path,
+                    "result_position_id": result_position_id,
+                    "factor": sign * factor, "name": values["name"],
+                    "amount": values["amount"] * factor,
+                }
+            if node["Struktur"] == "B":
+                collect(roots["G"], path, factor * (-1 if node["VzWechsel"] else 1), position_id)
+            for child in children[position_id]:
+                collect(child, path, factor, result_position_id)
+
+        collect(item_id, [])
+        if account is not None:
+            definitions = self._rows(
+                "SELECT Nummer FROM KONTO WHERE Firma_id=? AND Nummer=? ORDER BY Nummer",
+                [company_id, account],
+            )
+            if len(definitions) != 1:
+                raise ParameterFehler("Genau eine Kontendefinition in dieser Firma erwartet")
+            routes = {number: route for number, route in routes.items() if number == account}
+        # Nur der gespeicherte effektive Hauptbuchkontoschlüssel entscheidet.
+        # Weder Belegnummernähnlichkeit noch zusätzliche Personenkontozeilen erzeugen Beziehungen.
+        ledger = self._rows(
+            "SELECT j._rowid AS journal_row_id, b._rowid AS booking_id, "
+            "b.Datum AS date, b.Art AS booking_type, b.Status AS booking_status, "
+            "j.Konto AS original_account, j.SammelKonto AS collective_account, "
+            "CASE WHEN j.SammelKonto>0 THEN j.SammelKonto ELSE j.Konto END AS account, "
+            "coalesce(j.BetragSoll,0) AS debit, coalesce(j.BetragHaben,0) AS credit "
+            "FROM JOURNAL j JOIN BUCHUNG b ON b._rowid=j.Buchung_id AND b.Firma_id=j.Firma_id "
+            "WHERE b.Firma_id=? AND b.Wj_id=? AND b.Datum>=? AND b.Datum<=? "
+            "ORDER BY b.Datum, b._rowid, j._rowid",
+            [company_id, period["_rowid"], period["Von"], period["Bis"]],
+        )
+        entries = []
+        contribution = ZERO
+        opening = ZERO
+        for row in ledger:
+            route = routes.get(row["account"])
+            if route is None:
+                continue
+            debit, credit = Decimal(str(row["debit"])), Decimal(str(row["credit"]))
+            amount = (debit - credit) * route["factor"]
+            contribution += amount
+            is_opening = row["booking_type"] == 2
+            if is_opening:
+                opening += amount
+            entries.append({
+                **row, "debit": _money(debit), "credit": _money(credit),
+                "opening_entry": is_opening, "balance": _money(debit - credit),
+                "factor": route["factor"], "contribution": _money(amount),
+                "source_item_id": route["source_item_id"],
+                "position_path": route["position_path"],
+                "result_position_id": route["result_position_id"],
+            })
+        expected = sum((route["amount"] for route in routes.values()), ZERO)
+        if contribution != expected or (account is None and contribution != totals[item_id]):
+            raise DatenFehler("Journalnachweis und berechneter Positionsbeitrag stimmen nicht überein")
+        page = entries[offset:offset + limit]
+        truncated = offset + len(page) < len(entries)
+        return {
+            "company_id": company_id, "fiscal_year": period, "structure_id": structure_id,
+            "item_id": item_id, "name": nodes[item_id]["Bezeichnung"], "account": account,
+            "currency": period["Waehrung"],
+            "money_unit": "Währungseinheiten als Dezimalzeichenketten; bereits durch 100 geteilt",
+            "position_amount": _money(totals[item_id]), "contribution": _money(contribution),
+            "opening_contribution": _money(opening),
+            "movement_contribution": _money(contribution - opening),
+            "annual_result": _money(annual_result),
+            "accounts": [{"account": number, **{key: value for key, value in route.items() if key != "amount"},
+                          "contribution": _money(route["amount"])} for number, route in sorted(routes.items())],
+            "entries": page, "total_entries": len(entries), "truncated": truncated,
+            "next_offset": offset + len(page) if truncated else None,
+            "basis": "Identische Kontensalden und Zuordnung wie Bilanz/GuV. Beitrag=(Soll-Haben)*factor; Vorzeichen der Quellposition und gegebenenfalls Ergebnisposition, keine Vorzeichenvererbung von Summenpositionen. Art=2 ist Eröffnung; alle Statuswerte und gespeicherten Stornovorzeichen bleiben erhalten.",
+            "caveats": [
+                "Summen und Kontenbeiträge gelten für die gesamte Auswahl, nicht nur die Seite; keine Addition mit übergeordneten Berichtspositionen.",
+                "position_path führt von der Auswahl zur Quellposition. Bei result_position_id ist der Übergang zur GuV eine berechnete Ergebnisübernahme, keine gespeicherte Buchungsbeziehung.",
+                "Konten mit Jahressaldo null und ausgeschlossene, insgesamt ausgeglichene Vortragskonten tragen gemäß Berichtsberechnung nicht bei.",
+                "konto filtert das effektive Hauptbuchkonto, nicht das ursprüngliche Personenkonto. Keine Vorjahreswerte werden erneut addiert.",
+            ],
+        }
 
     def financial_statements(self, company_id, year, structure_id=None, include_previous_year=True):
         _integer(company_id, "firma_id")
         _integer(year, "jahr")
         if not 1 <= year <= 9999:
-            raise ValueError("jahr muss zwischen 1 und 9999 liegen")
+            raise ParameterFehler("jahr muss zwischen 1 und 9999 liegen")
         if structure_id is not None:
             _integer(structure_id, "gliederung_id")
         period = self._fiscal_year(company_id, year)
@@ -358,19 +468,49 @@ class StatementReader:
         current = self._calculate(company_id, period, nodes, children, assignments, roots)
         previous_period = None
         previous = None
-        if include_previous_year:
+        if include_previous_year and date.fromisoformat(period["Von"]) > date.min:
             previous_end = (date.fromisoformat(period["Von"]) - timedelta(days=1)).isoformat()
             matches = self._rows(
                 "SELECT _rowid, Bezeichnung, Von, Bis, Waehrung, Gesperrt FROM WIRTSCHAFTSJAHR "
                 "WHERE Firma_id=? AND Bis=? ORDER BY Von, _rowid", [company_id, previous_end]
             )
             if len(matches) > 1:
-                raise ValueError("Das vorangehende Wirtschaftsjahr ist nicht eindeutig")
+                raise DatenFehler("Das vorangehende Wirtschaftsjahr ist nicht eindeutig")
             if matches:
                 previous_period = matches[0]
-                if previous_period["Waehrung"] != period["Waehrung"]:
-                    raise ValueError("Wirtschaftsjahre mit unterschiedlichen Berichtswährungen können nicht verglichen werden")
                 previous = self._calculate(company_id, previous_period, nodes, children, assignments, roots)
+        currency_comparable = previous_period is not None and bool(period["Waehrung"]) and (
+            previous_period["Waehrung"] == period["Waehrung"]
+        )
+
+        def next_year(value):
+            value = date.fromisoformat(value)
+            try:
+                return value.replace(year=value.year + 1).isoformat()
+            except ValueError:
+                # Der Schalttag wird beim Kalenderjahresvergleich zum 28. Februar.
+                if value.month == 2 and value.day == 29 and value.year < 9999:
+                    return value.replace(year=value.year + 1, day=28).isoformat()
+                return None
+
+        period_comparable = previous_period is not None and (
+            next_year(previous_period["Von"]) == period["Von"]
+            and next_year(previous_period["Bis"]) == period["Bis"]
+        )
+        comparable = currency_comparable and period_comparable
+
+        def deviation(amount, prior):
+            if prior is None or not comparable:
+                return {"absolute_change": None, "percentage_change": None, "percentage_basis": "not_comparable"}
+            change = amount - prior
+            if prior == 0:
+                percentage = "0.00" if amount == 0 else None
+                basis = "both_zero" if amount == 0 else "zero_previous"
+            else:
+                percentage = format((change / abs(prior) * 100).quantize(
+                    Decimal("0.01"), rounding=ROUND_HALF_UP), "f")
+                basis = "absolute_previous"
+            return {"absolute_change": _money(change), "percentage_change": percentage, "percentage_basis": basis}
 
         def section(side):
             lines = []
@@ -403,15 +543,17 @@ class StatementReader:
                     old = old_accounts.get(account)
                     account_rows.append({
                         "account": account,
-                        "name": (now or old)["name"],
+                        "name": now["name"] if now is not None else old["name"] if old is not None else None,
                         "amount": _money(now["amount"] if now else ZERO),
                         "previous_amount": _money(old["amount"] if old else ZERO) if previous else None,
+                        **deviation(now["amount"] if now else ZERO, (old["amount"] if old else ZERO) if previous else None),
                     })
                 node = nodes[item_id]
                 lines.append({
                     "item_id": item_id, "parent_id": node["ParentId"], "depth": depth,
                     "name": node["Bezeichnung"], "amount": _money(amount),
                     "previous_amount": _money(prior) if prior is not None else None,
+                    **deviation(amount, prior),
                     "accounts": account_rows,
                 })
                 for child in children[item_id]:
@@ -420,11 +562,22 @@ class StatementReader:
             append(roots[side], 0)
             return {"total": _money(current[0][roots[side]]),
                     "previous_total": _money(previous[0][roots[side]]) if previous else None,
+                    **deviation(current[0][roots[side]], previous[0][roots[side]] if previous else None),
                     "lines": lines}
 
         return {
             "company_id": company_id, "fiscal_year": period, "previous_fiscal_year": previous_period,
             "structure_id": structure_id, "currency": period["Waehrung"],
+            "previous_currency": previous_period["Waehrung"] if previous_period else None,
+            "comparison": {
+                "requested": include_previous_year, "comparable": comparable,
+                "currency_comparable": currency_comparable, "period_comparable": period_comparable,
+                "reason": ("disabled" if not include_previous_year else "missing_previous_year" if previous_period is None
+                           else "different_or_missing_currency" if not currency_comparable
+                           else "different_period" if not period_comparable else "comparable"),
+                "percentage_formula": "(Betrag - Vorjahresbetrag) / abs(Vorjahresbetrag) * 100; Null/Null=0, sonst bei Nullbasis nicht definiert",
+                "period_rule": "Beginn und Ende entsprechen dem um ein Kalenderjahr verschobenen Vorjahr; 29. Februar wird zum 28. Februar.",
+            },
             "money_unit": "Währungseinheiten als Dezimalzeichenketten; bereits durch 100 geteilt",
             "basis": "Gespeicherte Hierarchie und Kontenlisten aus STRUKTURPOSITION sowie JOURNAL-Buchungen des Wirtschaftsjahres, alle Perioden und Buchungsstatuswerte; einschließlich gebuchter Eröffnungswerte, ohne Vorjahressalden erneut zu addieren",
             "balance_sheet": {"assets": section("A"), "liabilities_and_equity": section("P")},

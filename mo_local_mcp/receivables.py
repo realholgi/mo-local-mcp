@@ -3,6 +3,7 @@
 from datetime import date
 
 from .business import OPEN_ITEM_TYPES, _currency_amounts, _integer, _labels
+from .errors import Abfragegrenze, ParameterFehler
 
 
 DERIVED_MONEY = {
@@ -104,12 +105,16 @@ BASIS = [
 
 def _filters(company_id, as_of, side, address_id, include_settled, overdue_only):
     _integer(company_id, 'firma_id')
-    if not isinstance(as_of, str) or date.fromisoformat(as_of).isoformat()!=as_of:
-        raise ValueError('stichtag muss das Format JJJJ-MM-TT haben')
+    try:
+        gueltig = isinstance(as_of, str) and date.fromisoformat(as_of).isoformat() == as_of
+    except ValueError:
+        gueltig = False
+    if not gueltig:
+        raise ParameterFehler('stichtag muss das Format JJJJ-MM-TT haben')
     if side not in {'receivable','payable','all'}:
-        raise ValueError('seite muss Forderungen, Verbindlichkeiten oder alle auswählen')
+        raise ParameterFehler('seite muss Forderungen, Verbindlichkeiten oder alle auswählen')
     if not isinstance(include_settled,bool) or not isinstance(overdue_only,bool):
-        raise ValueError('mit_ausgeglichenen und nur_ueberfaellige müssen Wahrheitswerte sein')
+        raise ParameterFehler('mit_ausgeglichenen und nur_ueberfaellige müssen Wahrheitswerte sein')
     where, bindings = [], [as_of,company_id]
     if side!='all':
         where.append('side=?')
@@ -138,7 +143,7 @@ def _totals(reader, where, bindings):
     while True:
         page=reader._page(sql,bindings,500,offset)
         if page['truncated'] and not page['rows']:
-            raise ValueError('Eine historische OP-Summenzeile überschreitet die Ausgabegrenze')
+            raise Abfragegrenze('Eine historische OP-Summenzeile überschreitet die Ausgabegrenze')
         rows.extend(page['rows'])
         if page['next_offset'] is None:
             return _currency_amounts({'columns':page['columns'],'rows':rows,'truncated':False},'POSTEN',DERIVED_MONEY)
@@ -151,7 +156,7 @@ def get_open_items_as_of(reader, company_id, as_of, side='receivable', address_i
     result=reader._page(OP_AS_OF_SQL+'SELECT * FROM items'+where+
                         ' ORDER BY due_date IS NULL,due_date,Datum,_rowid',bindings,limit,offset)
     if result['truncated'] and not result['rows']:
-        raise ValueError('Eine historische OP-Zeile überschreitet die Ausgabegrenze')
+        raise Abfragegrenze('Eine historische OP-Zeile überschreitet die Ausgabegrenze')
     result=_currency_amounts(_labels(result,'Art',OPEN_ITEM_TYPES),'POSTEN',DERIVED_MONEY)
     result.update(as_of=as_of,totals=_totals(reader,where,bindings),basis=BASIS)
     return result

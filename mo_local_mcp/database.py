@@ -11,6 +11,8 @@ import apsw
 from cryptography.hazmat.decrepit.ciphers.modes import OFB
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms
 
+from .errors import Abfragegrenze, DatenFehler, DatenstandGeaendert, ParameterFehler, RechteFehler
+
 
 class _EncryptedFile(apsw.VFSFile):
     def __init__(self, name, flags, key, page_size):
@@ -61,7 +63,7 @@ def _authorize(action, first, second, database, source):
         return apsw.SQLITE_OK
     if action == apsw.SQLITE_PRAGMA and first in {"table_xinfo", "foreign_key_list", "index_list"}:
         return apsw.SQLITE_OK
-    return apsw.SQLITE_DENY
+    raise apsw.AuthError("Dieser Datenbankzugriff ist nicht freigegeben")
 
 
 def _cell(value):
@@ -82,26 +84,26 @@ class OfficeDatabase:
         with self.path.open("rb") as source:
             header = source.read(100)
         if len(header) != 100 or header[:16] == b"SQLite format 3\0":
-            raise ValueError("Ein verschlüsselter MonKey-Office-Datenbankstand wird erwartet")
+            raise DatenFehler("Ein verschlüsselter MonKey-Office-Datenbankstand wird erwartet")
         self.page_size = int.from_bytes(header[16:18], "big")
         if self.page_size == 1:
             self.page_size = 65536
         if self.page_size not in {512, 1024, 2048, 4096, 8192, 16384, 32768, 65536}:
-            raise ValueError("Ungültige Datenbankseitengröße")
+            raise DatenFehler("Ungültige Datenbankseitengröße")
         if header[20] != 0 or header[21:24] != b"\x40\x20\x20":
-            raise ValueError("Nicht unterstütztes Verschlüsselungsprofil: SEE AES-128-OFB ohne Nonce wird erwartet")
+            raise DatenFehler("Nicht unterstütztes Verschlüsselungsprofil: SEE AES-128-OFB ohne Nonce wird erwartet")
         if self.path.stat().st_size % self.page_size:
-            raise ValueError("Unvollständiger Datenbankstand")
+            raise DatenFehler("Unvollständiger Datenbankstand")
         key_path = Path(key_file).expanduser()
         if key_path.stat().st_mode & 0o077:
-            raise ValueError("Schlüsseldatei muss privat sein; chmod 600 auf die Schlüsseldatei anwenden")
+            raise RechteFehler("Schlüsseldatei muss privat sein; chmod 600 auf die Schlüsseldatei anwenden")
         key = key_path.read_bytes()
         if not key or key.startswith((b"aes256:", b"rc4:")):
-            raise ValueError("Der wiederhergestellte AES-128-Datenbankschlüssel wird erwartet")
+            raise ParameterFehler("Der wiederhergestellte AES-128-Datenbankschlüssel wird erwartet")
         if key.startswith(b"aes128:"):
             key = key[7:]
         if not key:
-            raise ValueError("Leerer Verschlüsselungsschlüssel")
+            raise ParameterFehler("Leerer Verschlüsselungsschlüssel")
         self._vfs = _EncryptedVFS((key * ((16 + len(key) - 1) // len(key)))[:16], self.page_size)
         self._db = None
         try:
@@ -127,20 +129,26 @@ class OfficeDatabase:
         for suffix in ("-wal", "-journal"):
             sidecar = Path(str(self.path) + suffix)
             if sidecar.exists() and sidecar.stat().st_size:
-                raise ValueError("WAL/Journal gefunden. Einen geschlossenen Datenbankstand mit abgeschlossenem Checkpoint verwenden, keine laufende Datenbank")
+                raise DatenstandGeaendert("WAL/Journal gefunden. Einen geschlossenen Datenbankstand mit abgeschlossenem Checkpoint verwenden, keine laufende Datenbank")
         stat = self.path.stat()
         return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
 
     def _unchanged(self):
-        if self._fingerprint() != self._identity:
-            raise ValueError("Datenbankstand wurde verändert. Den Server mit einem ruhenden Datenbankstand neu starten")
+        try:
+            geaendert = self._fingerprint() != self._identity
+        except FileNotFoundError as fehler:
+            raise DatenstandGeaendert("Datenbankstand ist nicht mehr vorhanden. Den Server neu starten") from fehler
+        if geaendert:
+            raise DatenstandGeaendert("Datenbankstand wurde verändert. Den Server mit einem ruhenden Datenbankstand neu starten")
 
     def query(self, sql, parameters=None, limit=100):
         """SELECT-/CTE-Abfragen mit Grenzen für Zeilen, Ausgabegröße, Speicher und VM-Laufzeit ausführen."""
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 500:
-            raise ValueError("anzahl muss zwischen 1 und 500 liegen")
-        if not isinstance(sql, str) or not sql.strip() or len(sql) > 100_000:
-            raise ValueError("Eine SELECT-Abfrage mit höchstens 100000 Zeichen angeben")
+            raise ParameterFehler("anzahl muss zwischen 1 und 500 liegen")
+        if not isinstance(sql, str) or not sql.strip():
+            raise ParameterFehler("Eine SELECT-Abfrage angeben")
+        if len(sql) > 100_000:
+            raise Abfragegrenze("Eine SELECT-Abfrage mit höchstens 100000 Zeichen angeben")
         statement = sql.strip().removesuffix(";")
         with self._lock:
             self._unchanged()
@@ -175,10 +183,41 @@ class OfficeDatabase:
                 cursor.close()
                 self._db.set_progress_handler(None)
 
+    def read_blob(self, table, column, company_id, row_id, offset, length):
+        """Einen begrenzten Bereich eines firmengebundenen Anhang-BLOBs inkrementell lesen."""
+        if (table, column) not in {
+            ("ATTACHMENTCHUNK", "Chunk"), ("ATTACHMENT", "Data"), ("ATTACHMENTALIAS", "Data"),
+        }:
+            raise RechteFehler("Diese Tabelle und Spalte sind nicht zum Anhangslesen freigegeben")
+        for name, value, minimum in (
+            ("firma_id", company_id, 1), ("anhang_id", row_id, 1),
+            ("byte_versatz", offset, 0), ("byte_anzahl", length, 1),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+                raise ParameterFehler(f"{name} muss eine ganze Zahl >= {minimum} sein")
+        if length > 131072:
+            raise Abfragegrenze("byte_anzahl darf höchstens 131072 sein")
+        found = self.query(
+            f"SELECT _rowid FROM {table} WHERE Firma_id=? AND _rowid=? AND typeof({column})='blob'",
+            [company_id, row_id], 1,
+        )
+        if not found["rows"]:
+            raise ParameterFehler("Anhang-BLOB in dieser Firma nicht gefunden")
+        with self._lock:
+            self._unchanged()
+            blob = self._db.blob_open("main", table, column, row_id, False)
+            try:
+                blob.seek(min(offset, blob.length()))
+                result = blob.read(length)
+            finally:
+                blob.close()
+            self._unchanged()
+            return result
+
     def describe(self, table):
         schema = self.query("SELECT type, sql FROM sqlite_schema WHERE name = ? AND type IN ('table', 'view')", [table])
         if not schema["rows"]:
-            raise ValueError("Unbekannte Tabelle oder Sicht")
+            raise ParameterFehler("Unbekannte Tabelle oder Sicht")
         return {
             "name": table,
             "type": schema["rows"][0][0],

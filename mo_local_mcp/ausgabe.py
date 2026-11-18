@@ -122,6 +122,17 @@ SCHLUESSEL = {
     'text': 'text', 'undated_allocations': 'undatierte_zuordnungen',
     'missing_documented_columns': 'fehlende_dokumentierte_spalten',
     'missing_mapped_columns': 'fehlende_zugeordnete_spalten',
+    'absolute_change': 'abweichung_absolut', 'percentage_change': 'abweichung_prozent',
+    'percentage_basis': 'prozentgrundlage', 'previous_currency': 'vorjahreswaehrung',
+    'comparison': 'vorjahresvergleich', 'requested': 'angefordert', 'comparable': 'vergleichbar',
+    'currency_comparable': 'waehrung_vergleichbar', 'period_comparable': 'zeitraum_vergleichbar',
+    'percentage_formula': 'prozentformel', 'period_rule': 'zeitraumregel',
+    'position_amount': 'positionsbetrag', 'contribution': 'beitrag',
+    'opening_contribution': 'eroeffnungsbeitrag', 'movement_contribution': 'bewegungsbeitrag',
+    'annual_result': 'jahresergebnis', 'source_item_id': 'ursprungsposition_id',
+    'position_path': 'positionspfad', 'result_position_id': 'ergebnisposition_id',
+    'factor': 'faktor', 'booking_type': 'buchungsart', 'booking_status': 'buchungsstatus',
+    'original_account': 'ursprungskonto', 'collective_account': 'sammelkonto',
 }
 
 for englisch, deutsch in (
@@ -157,6 +168,15 @@ WERTE = {
         'flag': 'kennzeichen', 'unknown': 'unbekannt',
     },
     'source': {'journal_reconstruction': 'journalrekonstruktion'},
+    'percentage_basis': {
+        'not_comparable': 'nicht_vergleichbar', 'both_zero': 'beide_null',
+        'zero_previous': 'vorjahr_null', 'absolute_previous': 'absoluter_vorjahresbetrag',
+    },
+    'reason': {
+        'disabled': 'nicht_angefordert', 'missing_previous_year': 'vorjahr_fehlt',
+        'different_or_missing_currency': 'waehrung_abweichend_oder_fehlt',
+        'different_period': 'zeitraum_abweichend', 'comparable': 'vergleichbar',
+    },
 }
 
 

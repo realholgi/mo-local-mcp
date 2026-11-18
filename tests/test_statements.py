@@ -397,7 +397,8 @@ class StatementTests(unittest.TestCase):
         assets = report['balance_sheet']['assets']
         receivables = position(assets,3)
         self.assertEqual(receivables['accounts'],[{
-            'account':1400,'name':'Forderungen aus Lieferungen und Leistungen','amount':'10.00','previous_amount':'5.00'}])
+            'account':1400,'name':'Forderungen aus Lieferungen und Leistungen','amount':'10.00','previous_amount':'5.00',
+            'absolute_change':'5.00','percentage_change':'100.00','percentage_basis':'absolute_previous'}])
         self.assertEqual(assets['previous_total'],'9.00')
         self.assertEqual(report['previous_fiscal_year']['_rowid'],1)
         self.assertEqual(report['profit_and_loss']['total'],'20.00')
@@ -457,8 +458,9 @@ class StatementTests(unittest.TestCase):
             reader.financial_statements(3,2025)
         with self.assertRaises(ValueError):
             reader.financial_statements(True,2025)
-        with self.assertRaisesRegex(ValueError,'unterschiedlichen Berichtswährungen'):
-            self.reader("UPDATE WIRTSCHAFTSJAHR SET Waehrung='USD' WHERE _rowid=1;").financial_statements(1,2025)
+        comparison = self.reader("UPDATE WIRTSCHAFTSJAHR SET Waehrung='USD' WHERE _rowid=1;").financial_statements(1,2025)
+        self.assertFalse(comparison['comparison']['comparable'])
+        self.assertIsNone(comparison['profit_and_loss']['absolute_change'])
 
     def test_layout_larger_than_query_page_is_read_completely(self):
         reader = self.reader("""

@@ -4,6 +4,7 @@ from collections import defaultdict
 from decimal import Decimal
 
 from .business import _dates, _integer
+from .errors import ParameterFehler
 from .statements import StatementReader, _money
 
 
@@ -14,9 +15,9 @@ def list_personal_balances(reader, company_id, side="customer", date_from=None,
     _integer(limit, "anzahl")
     _integer(offset, "versatz", 0)
     if limit > 500:
-        raise ValueError("anzahl darf höchstens 500 sein")
+        raise ParameterFehler("anzahl darf höchstens 500 sein")
     if side not in {"customer", "supplier"}:
-        raise ValueError("seite muss customer oder supplier sein")
+        raise ParameterFehler("seite muss customer oder supplier sein")
     if address_id is not None:
         _integer(address_id, "adresse_id")
     prefix = "KF" if side == "customer" else "LF"

@@ -6,6 +6,7 @@ Dies sind Abfragen eines Datenbankstands, keine Connect-Aufrufe oder -Nachbildun
 from datetime import date
 from decimal import Decimal
 
+from .errors import Abfragegrenze, DatenFehler, ParameterFehler
 from .master_catalog import MASTERS_CATALOG
 from .tax_catalog import TAX_CATALOG
 from .asset_catalog import ASSET_CATALOG, ASSET_MONEY_FIELDS
@@ -352,7 +353,7 @@ def _currency_amounts(result, table, extra_fields=()):
 
 def _integer(value, name, minimum=1):
     if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
-        raise ValueError(f"{name} muss eine ganze Zahl >= {minimum} sein")
+        raise ParameterFehler(f"{name} muss eine ganze Zahl >= {minimum} sein")
 
 
 def _dates(where, bindings, column, date_from, date_to):
@@ -363,9 +364,9 @@ def _dates(where, bindings, column, date_from, date_to):
             except ValueError:
                 valid = False
             if not valid:
-                raise ValueError(f"{name} muss ein gültiges Datum im Format JJJJ-MM-TT sein")
+                raise ParameterFehler(f"{name} muss ein gültiges Datum im Format JJJJ-MM-TT sein")
     if date_from and date_to and date_from > date_to:
-        raise ValueError("datum_von darf nicht nach datum_bis liegen")
+        raise ParameterFehler("datum_von darf nicht nach datum_bis liegen")
     for value, operator in ((date_from, ">="), (date_to, "<=")):
         if value is not None:
             where.append(f"{column} {operator} ?")
@@ -390,7 +391,7 @@ def _packed_strings(value):
         nonlocal position
         prefix = value[position:position + 6]
         if len(prefix) != 6 or not prefix.isascii() or not prefix.isdigit():
-            raise ValueError("Ungültige gepackte Kontensteuereinstellungen")
+            raise DatenFehler("Ungültige gepackte Kontensteuereinstellungen")
         position += 6
         return int(prefix)
 
@@ -400,11 +401,11 @@ def _packed_strings(value):
         length = size()
         item = value[position:position + length]
         if len(item) != length:
-            raise ValueError("Abgeschnittene gepackte Kontensteuereinstellungen")
+            raise DatenFehler("Abgeschnittene gepackte Kontensteuereinstellungen")
         items.append(item)
         position += length
     if position != len(value):
-        raise ValueError("Nachgestellte Daten in gepackten Kontensteuereinstellungen")
+        raise DatenFehler("Nachgestellte Daten in gepackten Kontensteuereinstellungen")
     return items
 
 
@@ -415,7 +416,7 @@ class BusinessReader:
     def schema(self, table=None):
         names = [table.upper()] if table is not None else list(CATALOG)
         if any(name not in CATALOG for name in names):
-            raise ValueError("Keine fachliche Zuordnung für diese Tabelle; für das Rohschema die Tabellenbeschreibung verwenden")
+            raise ParameterFehler("Keine fachliche Zuordnung für diese Tabelle; für das Rohschema die Tabellenbeschreibung verwenden")
         tables = {}
         for name in names:
             description = self.database.describe(name)
@@ -448,8 +449,8 @@ class BusinessReader:
         result = self.database.query("SELECT * FROM FIRMA WHERE _rowid=?", [company_id], 1)
         if not result["rows"]:
             if result["truncated"]:
-                raise ValueError("Firmendatensatz überschreitet das Ausgabelimit; mit einer SQL-Abfrage weniger Spalten auswählen")
-            raise ValueError("Firma nicht gefunden")
+                raise Abfragegrenze("Firmendatensatz überschreitet das Ausgabelimit; mit einer SQL-Abfrage weniger Spalten auswählen")
+            raise ParameterFehler("Firma nicht gefunden")
         return {"company": result}
 
     def fiscal_years(self, company_id, limit=100, offset=0):
@@ -495,7 +496,7 @@ class BusinessReader:
                 where.append("Nummer" + operator + "?")
                 bindings.append(value)
         if account_from is not None and account_to is not None and account_from > account_to:
-            raise ValueError("konto_von darf konto_bis nicht überschreiten")
+            raise ParameterFehler("konto_von darf konto_bis nicht überschreiten")
         where.append("instr(lower(CAST(Nummer AS TEXT) || ' ' || coalesce(Bezeichnung,'') || ' ' || coalesce(Bemerkung,'')),lower(?))>0")
         bindings.append(search)
         result = self._page(
@@ -511,12 +512,12 @@ class BusinessReader:
         for row in result["rows"]:
             versions = [_packed_strings(value) for value in _packed_strings(row[settings_index])]
             if any(len(version) != 5 for version in versions):
-                raise ValueError("Fünf Felder je Kontensteuerzuordnung erwartet")
+                raise DatenFehler("Fünf Felder je Kontensteuerzuordnung erwartet")
             for version in versions:
                 try:
                     date.fromisoformat(version[0])
                 except ValueError:
-                    raise ValueError("Ungültiges Datum in einer Kontensteuerzuordnung") from None
+                    raise DatenFehler("Ungültiges Datum in einer Kontensteuerzuordnung") from None
             versions.sort(key=lambda version: version[0], reverse=True)
             # Neuester nicht leerer Wert je Feld; bei gleichem Datum bleibt die erste gespeicherte
             # Alternative wie im gedruckten Kontenplan. "-" ist ein ausdrücklicher Schlüssel.
@@ -542,7 +543,7 @@ class BusinessReader:
             )
             percentages = dict(rates["rows"])
             if rates["truncated"] or len(percentages) != len(rates["rows"]) or set(percentages) != needed_rates:
-                raise ValueError("Genau ein firmenbezogener Prozentsatz je Platzhalter im Kontennamen erwartet")
+                raise DatenFehler("Genau ein firmenbezogener Prozentsatz je Platzhalter im Kontennamen erwartet")
             code_index = columns.index("Steuersatz")
             for row in result["rows"]:
                 if "#P#" in (row[name_index] or ""):
@@ -554,9 +555,9 @@ class BusinessReader:
     def addresses(self, company_id, search="", role="all", status="all", limit=100, offset=0):
         _integer(company_id, "firma_id")
         if role not in {"all", "customer", "supplier"} or status not in {"all", "active", "inactive", "blocked"}:
-            raise ValueError("Ungültige Adressrolle oder ungültiger Adressstatus")
+            raise ParameterFehler("Ungültige Adressrolle oder ungültiger Adressstatus")
         if role == "all" and status != "all":
-            raise ValueError("Bei Statusfilterung die Rolle Kunde oder Lieferant wählen")
+            raise ParameterFehler("Bei Statusfilterung die Rolle Kunde oder Lieferant wählen")
         where, bindings = ["Firma_id = ?"], [company_id]
         if role != "all":
             column = "KF_Status" if role == "customer" else "LF_Status"
@@ -577,8 +578,8 @@ class BusinessReader:
         header = self.database.query("SELECT * FROM ADRESSE WHERE Firma_id=? AND _rowid=?", [company_id, address_id], 1)
         if not header["rows"]:
             if header["truncated"]:
-                raise ValueError("Adressdatensatz überschreitet das Ausgabelimit; mit einer SQL-Abfrage weniger Spalten auswählen")
-            raise ValueError("Adresse in dieser Firma nicht gefunden")
+                raise Abfragegrenze("Adressdatensatz überschreitet das Ausgabelimit; mit einer SQL-Abfrage weniger Spalten auswählen")
+            raise ParameterFehler("Adresse in dieser Firma nicht gefunden")
         _labels(header, "KF_Status", ADDRESS_STATUSES)
         return {"address": _labels(header, "LF_Status", ADDRESS_STATUSES)}
 
@@ -588,7 +589,7 @@ class BusinessReader:
         if document_type is not None:
             _integer(document_type, "belegart")
             if document_type not in SALES_TYPES:
-                raise ValueError("belegart muss ein Connect-VerkaufbelegArt-Schlüssel von 1 bis 9 sein")
+                raise ParameterFehler("belegart muss ein Connect-VerkaufbelegArt-Schlüssel von 1 bis 9 sein")
             where.append("Art = ?")
             bindings.append(document_type)
         if address_id is not None:
@@ -610,8 +611,8 @@ class BusinessReader:
         header = self.database.query("SELECT * FROM AUFTRAG WHERE Firma_id=? AND _rowid=?", [company_id, document_id], 1)
         if not header["rows"]:
             if header["truncated"]:
-                raise ValueError("Verkaufsbeleg überschreitet das Ausgabelimit; mit einer SQL-Abfrage weniger Spalten auswählen")
-            raise ValueError("Verkaufsbeleg in dieser Firma nicht gefunden")
+                raise Abfragegrenze("Verkaufsbeleg überschreitet das Ausgabelimit; mit einer SQL-Abfrage weniger Spalten auswählen")
+            raise ParameterFehler("Verkaufsbeleg in dieser Firma nicht gefunden")
         _labels(header, "Art", SALES_TYPES)
         positions = self._page("SELECT * FROM AUFTRAGSPOSITION WHERE Firma_id=? AND Auftrag_id=? ORDER BY Nummer, _rowid", [company_id, document_id], position_limit, position_offset)
         _labels(positions, "Art", POSITION_TYPES)
@@ -657,14 +658,14 @@ class BusinessReader:
         header = self.database.query("SELECT * FROM BUCHUNG WHERE Firma_id=? AND _rowid=?", [company_id, booking_id], 1)
         if not header["rows"]:
             if header["truncated"]:
-                raise ValueError("Buchungskopf überschreitet das Ausgabelimit; mit einer SQL-Abfrage weniger Spalten auswählen")
-            raise ValueError("Buchung in dieser Firma nicht gefunden")
+                raise Abfragegrenze("Buchungskopf überschreitet das Ausgabelimit; mit einer SQL-Abfrage weniger Spalten auswählen")
+            raise ParameterFehler("Buchung in dieser Firma nicht gefunden")
         journal = self._page(
             "SELECT * FROM JOURNAL WHERE Firma_id=? AND Buchung_id=? ORDER BY NummerLong,Position,_rowid",
             [company_id, booking_id], journal_limit, journal_offset,
         )
         if journal["truncated"] and not journal["rows"]:
-            raise ValueError("Buchungsjournalzeile überschreitet das Ausgabelimit; mit einer SQL-Abfrage weniger Spalten auswählen")
+            raise Abfragegrenze("Buchungsjournalzeile überschreitet das Ausgabelimit; mit einer SQL-Abfrage weniger Spalten auswählen")
         return {
             "booking": _currency_amounts(header, "BUCHUNG"),
             "journal_rows": _currency_amounts(journal, "JOURNAL"),
@@ -690,8 +691,8 @@ class BusinessReader:
         header = self.database.query("SELECT * FROM POSTEN WHERE Firma_id=? AND _rowid=?", [company_id, item_id], 1)
         if not header["rows"]:
             if header["truncated"]:
-                raise ValueError("OP-Kopf überschreitet das Ausgabelimit; mit einer SQL-Abfrage weniger Spalten auswählen")
-            raise ValueError("Offener Posten in dieser Firma nicht gefunden")
+                raise Abfragegrenze("OP-Kopf überschreitet das Ausgabelimit; mit einer SQL-Abfrage weniger Spalten auswählen")
+            raise ParameterFehler("Offener Posten in dieser Firma nicht gefunden")
         item = dict(zip(header["columns"], header["rows"][0]))
         positions = self._page(
             "SELECT * FROM POSTENPOSITION WHERE Firma_id=? AND Posten_id=? ORDER BY Position,_rowid",
@@ -757,8 +758,8 @@ class BusinessReader:
         header = self.database.query("SELECT * FROM ZAHLUNG WHERE Firma_id=? AND _rowid=?", [company_id, payment_id], 1)
         if not header["rows"]:
             if header["truncated"]:
-                raise ValueError("Zahlungskopf überschreitet das Ausgabelimit; mit einer SQL-Abfrage weniger Spalten auswählen")
-            raise ValueError("Zahlung in dieser Firma nicht gefunden")
+                raise Abfragegrenze("Zahlungskopf überschreitet das Ausgabelimit; mit einer SQL-Abfrage weniger Spalten auswählen")
+            raise ParameterFehler("Zahlung in dieser Firma nicht gefunden")
         return {
             "payment": _currency_amounts(header, "ZAHLUNG"),
             "allocations": self._payment_allocations(company_id, "z._rowid", payment_id, limit, offset),
@@ -774,9 +775,9 @@ class BusinessReader:
                    date_from=None, date_to=None):
         _integer(company_id, "firma_id")
         if side not in {"receivable", "payable", "all"}:
-            raise ValueError("seite muss Forderungen, Verbindlichkeiten oder alle auswählen")
+            raise ParameterFehler("seite muss Forderungen, Verbindlichkeiten oder alle auswählen")
         if not isinstance(include_settled, bool):
-            raise ValueError("ausgeglichene_einbeziehen muss ein Wahrheitswert sein")
+            raise ParameterFehler("ausgeglichene_einbeziehen muss ein Wahrheitswert sein")
         where, bindings = ["Firma_id = ?", "coalesce(Entwurf,0) = 0"], [company_id]
         if not include_settled:
             where.append("OffenFW <> 0")

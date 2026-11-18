@@ -1,6 +1,7 @@
 """Gespeicherte Anlagen und Abschreibungsbewegungen ohne Neuberechnung lesen."""
 
 from .business import _currency_amounts, _dates, _integer
+from .errors import Abfragegrenze, ParameterFehler
 from .masters import _search
 
 
@@ -57,8 +58,8 @@ def get_asset(reader, company_id, asset_id, limit=100, offset=0):
     )
     if not header['rows']:
         if header['truncated']:
-            raise ValueError('Anlagenkopf überschreitet die Ausgabegrenze; mit einer gezielten SQL-Abfrage weniger Spalten auswählen')
-        raise ValueError('Anlage in dieser Firma nicht gefunden')
+            raise Abfragegrenze('Anlagenkopf überschreitet die Ausgabegrenze; mit einer gezielten SQL-Abfrage weniger Spalten auswählen')
+        raise ParameterFehler('Anlage in dieser Firma nicht gefunden')
     return {
         'asset': _currency_amounts(header, 'ANLAGE'),
         'movements': get_depreciation_schedule(reader, company_id, asset_id, limit=limit, offset=offset),

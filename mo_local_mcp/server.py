@@ -15,12 +15,19 @@ from . import assets, commerce, masters, personal_accounts, receivables, taxes
 from .ausgabe import deutsche_ausgabe
 from .kommandozeile import DeutscherArgumentParser
 from .mcp_deutsch import DeutscherMCP
+from .access import ReadAccess
+from .guidance import register_guidance
+from .snapshot import snapshot_overview
+from . import analytics, attachments, documents, quality
+from .reconciliation import reconcile_accounts
 
 
 DEFAULT_KEY = Path.home() / "Library/Application Support/mo-local-mcp/database.key"
+ANHANG_SPEICHER = {"eintrag": "item", "altbestand": "legacy", "alias": "alias"}
 
 
-def create_server(database):
+def create_server(database, *, firma_ids=None, sql_erlaubt=False, sensible_stammdaten_erlaubt=True):
+    access = ReadAccess(firma_ids, sql_erlaubt, sensible_stammdaten_erlaubt)
     business = BusinessReader(database)
     statements = StatementReader(database)
     server = DeutscherMCP(
@@ -49,9 +56,15 @@ def create_server(database):
     nur_lesend = ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False)
 
     def werkzeug(funktion):
+        if not access.tool_allowed(funktion.__name__):
+            return funktion
+        parameters = signature(funktion)
         server.kommando_parameter[funktion.__name__] = set(signature(funktion).parameters)
         @wraps(funktion)
         def aufrufen(*args, **kwargs):
+            bound = parameters.bind(*args, **kwargs)
+            if "firma_id" in bound.arguments:
+                access.require_company(bound.arguments["firma_id"])
             return deutsche_ausgabe(
                 funktion(*args, **kwargs),
                 rohe_spalten=funktion.__name__ in {
@@ -74,6 +87,7 @@ def create_server(database):
             "verschluesselung": "SEE AES-128-OFB; reservierte Bytes und Nonce-Bytes sind null",
             "nur_lesend": True, "fester_datenstand": True, "objekte": dict(counts["rows"]),
             "begrenzungen": {"zeilen": 500, "ergebnis_zeichen": 1_000_000, "abfrage_sekunden": 5},
+            "zugriff": access.describe(),
         }
 
     @werkzeug
@@ -125,7 +139,7 @@ def create_server(database):
     @werkzeug
     def firmen_auflisten(anzahl: int = 100, versatz: int = 0) -> dict:
         """Listet Firmen mit ihren lokalen IDs; vor Fachabfragen eine Firma ausdrücklich auswählen."""
-        return business.companies(anzahl, versatz)
+        return access.companies(business, anzahl, versatz)
 
     @werkzeug
     def firma_abrufen(firma_id: int) -> dict:
@@ -387,6 +401,36 @@ def create_server(database):
         return statements.financial_statements(firma_id, jahr, gliederung_id, mit_vorjahr)
 
     @werkzeug
+    def berichtsnachweis_anzeigen(
+        firma_id: int, jahr: int, gliederung_id: int, position_id: int,
+        konto: int | None = None, anzahl: int = 100, versatz: int = 0,
+    ) -> dict:
+        """Erklärt eine Berichtsposition durch die beitragenden Journal- und Buchungszeilen.
+
+        position_id ist die gespeicherte ItemId der gewählten Gliederung.
+        Unterpositionen und Jahresergebnis folgen derselben Berechnung wie Bilanz/GuV.
+        konto grenzt auf ein effektives Hauptbuchkonto ein. Vorzeichen und Eröffnungen
+        bleiben erhalten. Gesamtsummen gelten unabhängig von der Detailseite.
+        buchung_id führt zu buchung_abrufen. Kein Nachweis eines eingereichten Abschlusses.
+        """
+        return statements.statement_evidence(
+            firma_id, jahr, gliederung_id, position_id, konto, anzahl, versatz)
+
+    @werkzeug
+    def kontenabstimmung_pruefen(
+        firma_id: int, jahr: int, stichtag: str, anzahl: int = 100, versatz: int = 0,
+    ) -> dict:
+        """Stimmt Hauptbuch, Personenkonten und OP-SW-Salden zum ISO-Stichtag ab.
+
+        jahr wählt den Geschäftsjahresbeginn. Nur gespeicherte Konten- und
+        Buchungszuordnungen belegen den Vergleich. Fehlende Zuordnungen, unbekannte
+        Historien und Währungsprobleme ergeben keinen bestätigten Abgleich.
+        Forderungen und Verbindlichkeiten bleiben getrennt. Differenzen nennen
+        keine vermutete Ursache. Vollständige Summen gelten vor der Seiteneinteilung.
+        """
+        return reconcile_accounts(business, firma_id, jahr, stichtag, anzahl, versatz)
+
+    @werkzeug
     def kontoauszug_anzeigen(
         firma_id: int, jahr: int, konto: int, anzahl: int = 100, versatz: int = 0,
     ) -> dict:
@@ -556,6 +600,121 @@ def create_server(database):
         return assets.get_depreciation_schedule(
             business, firma_id, anlage_id, datum_von, datum_bis, nur_gebuchte, anzahl, versatz)
 
+    @werkzeug
+    def datenstand_anzeigen(firma_id: int) -> dict:
+        """Zeigt vorhandene Zeiträume, Zähler und letzte gespeicherte Buchungszeitpunkte.
+
+        Die Dateiänderungszeit ist kein bestätigtes Sicherungsdatum. Jüngste Buchungen und
+        gespeicherte Geschäftsjahre belegen keine vollständige oder aktuelle Buchführung.
+        """
+        return snapshot_overview(business, firma_id)
+
+    @werkzeug
+    def belege_suchen(
+        firma_id: int, suche: str, datum_von: str | None = None, datum_bis: str | None = None,
+        anzahl: int = 100, versatz: int = 0,
+    ) -> dict:
+        """Sucht gemeinsam in Buchungen, Verkaufs-/Einkaufsbelegen, Posten und Zahlungen.
+
+        Wörtliche Suche mit einschließlich gesetzten Datumsgrenzen. Treffer nennen Herkunft,
+        lokale ID und Folgewerkzeug. Entwürfe bleiben erkennbar. Keine bereichsübergreifenden Summen.
+        """
+        return documents.search_documents(business, firma_id, suche, datum_von, datum_bis, anzahl, versatz)
+
+    @werkzeug
+    def belegverknuepfungen_anzeigen(
+        firma_id: int, bereich: Literal["buchung", "verkauf", "einkauf", "posten", "zahlung"],
+        datensatz_id: int, anzahl: int = 100, versatz: int = 0,
+    ) -> dict:
+        """Zeigt unmittelbare gespeicherte Beleg-, Buchungs-, OP- und Zahlungsbeziehungen.
+
+        Nur IDs derselben Firma. Fehlende Ziele bleiben ausdrücklich unaufgelöst.
+        Eingehende und ausgehende Kanten sind seitenweise abrufbar. Keine Ähnlichkeitssuche.
+        """
+        return documents.document_links(business, firma_id, bereich, datensatz_id, anzahl, versatz)
+
+    @werkzeug
+    def datenqualitaet_pruefen(firma_id: int, anzahl: int = 100, versatz: int = 0) -> dict:
+        """Prüft gespeicherte Verknüpfungen, Buchungsausgleich und Zahlungszuordnungssummen.
+
+        Der vollständige Firmenbestand umfasst Entwürfe und Stornos. Seiten begrenzen nur
+        die Befunde, nicht deren Anzahl. Unbekannte Beträge sind kein erfolgreicher Abgleich.
+        Keine Korrektur und kein Nachweis steuerlicher Richtigkeit oder Vollständigkeit.
+        """
+        return quality.check_data_quality(business, firma_id, anzahl, versatz)
+
+    @werkzeug
+    def kostenstellen_auswerten(
+        firma_id: int, datum_von: str | None = None, datum_bis: str | None = None,
+        kostenstelle: str | None = None, anzahl: int = 100, versatz: int = 0,
+    ) -> dict:
+        """Zeigt Soll, Haben und Salden je Kostenstelle und tatsächlichem FW-/SW-Währungspaar.
+
+        Eröffnungen bleiben von Bewegungen getrennt. Gleiche Kostenstellen in beiden Feldern
+        zählen einmal. Verschiedene Kostenstellen erhalten je die ganze Zeile: Gruppen nicht
+        addieren. Gesamtwerte deduplizieren Quellzeilen innerhalb des Filters vor der Seite.
+        """
+        return analytics.cost_center_report(
+            business, firma_id, datum_von, datum_bis, kostenstelle, anzahl, versatz)
+
+    @werkzeug
+    def konten_monatlich_anzeigen(
+        firma_id: int, jahr: int, konto_von: int | None = None, konto_bis: int | None = None,
+        anzahl: int = 100, versatz: int = 0,
+    ) -> dict:
+        """Zeigt monatliche Hauptbuchbewegungen und getrennte Eröffnungen im Geschäftsjahr.
+
+        jahr bezeichnet den Geschäftsjahresbeginn. Positive Sammelkonten ersetzen Personenkonten
+        einmal. SW stammt aus dem Geschäftsjahr. Endsalden nutzen nur gespeicherte Eröffnungen
+        und Bewegungen ab Jahresbeginn; ein fehlender Anfangsvortrag wird nicht erfunden.
+        """
+        return analytics.monthly_accounts(business, firma_id, jahr, konto_von, konto_bis, anzahl, versatz)
+
+    @werkzeug
+    def guv_monatlich_anzeigen(firma_id: int, jahr: int, gliederung_id: int | None = None) -> dict:
+        """Zeigt Monats-GuV nach gespeicherter Gliederung mit ihren Vorzeichen und Unterpositionen.
+
+        Eröffnungen sind ausgeschlossen und separat ausgewiesen. Keine doppelte Addition von
+        Eltern- und Unterpositionen. Fehlende oder mehrdeutige Erfolgskontenzuordnungen führen
+        zu Fehlern. Kein eingereichter Abschluss und kein monatlicher Bilanzausgleich.
+        """
+        return analytics.monthly_profit_and_loss(business, firma_id, jahr, gliederung_id)
+
+    @werkzeug
+    def anhaenge_auflisten(
+        firma_id: int, suche: str = "", anzahl: int = 100, versatz: int = 0,
+    ) -> dict:
+        """Listet gespeicherte Anhangsmetadaten ohne BLOB-Inhalt oder externe Dateizugriffe.
+
+        Speicherart und ID wählen anhang_lesen. Source-/Art-Codes bleiben roh;
+        keine unbelegte Zuordnung zu Buchungen. Linkwerte werden niemals geöffnet.
+        """
+        result = attachments.list_attachments(business, firma_id, suche, anzahl, versatz)
+        labels = {value: key for key, value in ANHANG_SPEICHER.items()}
+        index = result["columns"].index("Speicher")
+        for row in result["rows"]:
+            row[index] = labels[row[index]]
+        return result
+
+    @werkzeug
+    def anhang_lesen(
+        firma_id: int, anhang_id: int,
+        speicher: Literal["eintrag", "altbestand", "alias"] = "eintrag",
+        byteversatz: int = 0, bytelaenge: int = 65536,
+    ) -> dict:
+        """Liest begrenzte rohe Speicherbytes eines Anhangs als Base64, höchstens 128 KiB.
+
+        Nur Datenbank-BLOBs derselben Firma; keine Dateipfade, Netzlinks oder Entpackvorgänge.
+        Kompression, fehlende Chunks und Größenabweichungen bleiben erkennbar. Bytes sind
+        kein bestätigtes PDF oder Integritätsnachweis. naechster_byteversatz setzt den Abruf fort.
+        """
+        result = attachments.read_attachment(
+            business, firma_id, anhang_id, ANHANG_SPEICHER[speicher], byteversatz, bytelaenge)
+        result["speicher"] = speicher
+        return result
+
+    register_guidance(server, business, access)
+
     return server
 
 
@@ -566,7 +725,15 @@ def main():
                           help="Geschlossener, konsistenter verschlüsselter Datenbankstand")
     optionen.add_argument("--schluesseldatei", type=Path, default=DEFAULT_KEY, metavar="DATEI",
                           help="Private Datei mit dem Datenbankschlüssel")
+    optionen.add_argument("--firma-id", type=int, action="append", metavar="ID",
+                          help="Nur diese Firma freigeben; mehrfach möglich. Sperrt freies SQL.")
+    optionen.add_argument("--mit-sql", action="store_true",
+                          help="Freie lesende SQL-Abfragen ausdrücklich freigeben, nur ohne Zugriffsbeschränkungen")
+    optionen.add_argument("--ohne-sensible-stammdaten", action="store_true",
+                          help="Nur Metadaten und definierte Auswertungen anbieten; sperrt freies SQL")
     args = parser.parse_args()
+    if args.firma_id is not None and any(value < 1 for value in args.firma_id):
+        parser.error("--firma-id muss eine positive Ganzzahl sein")
     try:
         database = OfficeDatabase(args.datenbank, args.schluesseldatei)
     except Exception as error:
@@ -574,7 +741,10 @@ def main():
         print(f"MonKey-Datenbankstand kann nicht geöffnet werden: {error}", file=sys.stderr)
         raise SystemExit(1) from None
     try:
-        create_server(database).run(transport="stdio")
+        create_server(
+            database, firma_ids=args.firma_id, sql_erlaubt=args.mit_sql,
+            sensible_stammdaten_erlaubt=not args.ohne_sensible_stammdaten,
+        ).run(transport="stdio")
     finally:
         database.close()
 

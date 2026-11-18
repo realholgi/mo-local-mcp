@@ -6,6 +6,7 @@ from decimal import Decimal, InvalidOperation
 from xml.etree import ElementTree
 
 from .business import _dates, _integer, _packed_strings
+from .errors import Abfragegrenze, DatenFehler, ParameterFehler
 
 
 # Deutsche UVA-Bemessungs-/Steuerfelder aus ELSTERMELDUNG. Unbekannte Codes bleiben unverändert.
@@ -33,7 +34,7 @@ def _all(reader, sql, bindings):
         rows.extend(_records(page))
         if page['next_offset'] is None:
             if page['truncated']:
-                raise ValueError('Eine Steuerquellzeile überschreitet die Ausgabegrenze der Abfrage')
+                raise Abfragegrenze('Eine Steuerquellzeile überschreitet die Ausgabegrenze der Abfrage')
             return rows
         offset = page['next_offset']
 
@@ -73,34 +74,34 @@ def get_tax_journal(reader, company_id, date_from=None, date_to=None, limit=100,
 def _period(year, month, quarter):
     _integer(year, 'jahr')
     if year > 9999 or (month is None) == (quarter is None):
-        raise ValueError('Genau einen monat oder ein quartal und ein jahr bis 9999 angeben')
+        raise ParameterFehler('Genau einen monat oder ein quartal und ein jahr bis 9999 angeben')
     if month is not None:
         _integer(month, 'monat')
         if month > 12:
-            raise ValueError('monat muss zwischen 1 und 12 liegen')
+            raise ParameterFehler('monat muss zwischen 1 und 12 liegen')
         first = last = month
     else:
         _integer(quarter, 'quartal')
         if quarter > 4:
-            raise ValueError('quartal muss zwischen 1 und 4 liegen')
+            raise ParameterFehler('quartal muss zwischen 1 und 4 liegen')
         first, last = 3 * quarter - 2, 3 * quarter
     return date(year, first, 1).isoformat(), date(year, last, monthrange(year, last)[1]).isoformat()
 
 
 def _stored_values(value):
     if value is None:
-        raise ValueError('Gespeicherte Kennzahlen fehlen')
+        raise DatenFehler('Gespeicherte Kennzahlen fehlen')
     if value.lstrip().startswith('<'):
         # STEUERERKLAERUNG verwendet jährlich ein anderes XML-Schema. Keine UVA-Zuordnung erraten.
         ElementTree.fromstring(value)
-        raise ValueError('Das XML-Kennzahlenschema ist für die UVA nicht nachgewiesen')
+        raise DatenFehler('Das XML-Kennzahlenschema ist für die UVA nicht nachgewiesen')
     items = _packed_strings(value)
     if len(items) % 2:
-        raise ValueError('Abwechselnde UVA-Kennzahl-/Wertfelder erwartet')
+        raise DatenFehler('Abwechselnde UVA-Kennzahl-/Wertfelder erwartet')
     result, seen = [], set()
     for code, raw in zip(items[::2], items[1::2]):
         if not code or code in seen:
-            raise ValueError('Fehlende oder doppelte UVA-Kennzahl')
+            raise DatenFehler('Fehlende oder doppelte UVA-Kennzahl')
         seen.add(code)
         kind = 'assessment_base' if code in _BASE_CODES else 'tax' if code in _TAX_CODES else 'flag' if code in _FLAGS else 'unknown'
         amount = None
@@ -111,7 +112,7 @@ def _stored_values(value):
                     raise InvalidOperation
                 amount = _money(number)
             except (InvalidOperation, ValueError):
-                raise ValueError('Ungültiger gespeicherter UVA-Geldwert') from None
+                raise DatenFehler('Ungültiger gespeicherter UVA-Geldwert') from None
         result.append({'code': code, 'raw_value': raw, 'kind': kind, 'amount': amount,
                        'authority': 'ELSTERMELDUNG.Kennzahlen; gespeicherte Meldung, nicht neu berechnet'})
     return result
@@ -128,7 +129,7 @@ def get_vat_return(reader, company_id, year, month=None, quarter=None, report_id
     _integer(offset, 'versatz', 0)
     _integer(limit, 'anzahl')
     if limit > 500:
-        raise ValueError('anzahl darf höchstens 500 sein')
+        raise ParameterFehler('anzahl darf höchstens 500 sein')
     if report_id is not None:
         _integer(report_id, 'meldung_id')
     start, end = _period(year, month, quarter)
@@ -140,7 +141,7 @@ def get_vat_return(reader, company_id, year, month=None, quarter=None, report_id
     if report_id is not None:
         reports = [r for r in reports if r['_rowid'] == report_id]
         if not reports:
-            raise ValueError('meldung_id bezeichnet nicht diese Firma und diesen UVA-Zeitraum')
+            raise ParameterFehler('meldung_id bezeichnet nicht diese Firma und diesen UVA-Zeitraum')
     result = {'company_id': company_id, 'date_from': start, 'date_to': end,
               'source': 'ELSTERMELDUNG' if reports else 'journal_reconstruction',
               'limitations': ['Gespeicherte Meldungswerte belegen weder eine Übermittlung noch aktuelle steuerrechtliche Richtigkeit.',

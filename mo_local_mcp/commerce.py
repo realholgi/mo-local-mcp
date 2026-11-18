@@ -5,6 +5,7 @@ from .commerce_catalog import (
     ARTICLE_STATUSES, ARTICLE_TYPES, COMMERCE_CATALOG, PROJECT_STATUSES, PURCHASE_TYPES,
 )
 from .masters import _search
+from .errors import Abfragegrenze, ParameterFehler
 
 
 def _bounds(company_id, limit, offset):
@@ -12,12 +13,12 @@ def _bounds(company_id, limit, offset):
     _integer(limit, "anzahl")
     _integer(offset, "versatz", 0)
     if limit > 500:
-        raise ValueError("anzahl darf höchstens 500 sein")
+        raise ParameterFehler("anzahl darf höchstens 500 sein")
 
 
 def _boolean(value, name):
     if not isinstance(value, bool):
-        raise ValueError(f"{name} muss ein boolescher Wert sein")
+        raise ParameterFehler(f"{name} muss ein boolescher Wert sein")
 
 
 def _basis(result, table):
@@ -68,8 +69,8 @@ def get_purchase_document(reader, company_id, document_id, position_limit=100, p
     )
     if not header["rows"]:
         if header["truncated"]:
-            raise ValueError("Einkaufsbeleg überschreitet die Ausgabegrenze; mit einer gezielten SQL-Abfrage weniger Spalten auswählen")
-        raise ValueError("Einkaufsbeleg in dieser Firma nicht gefunden")
+            raise Abfragegrenze("Einkaufsbeleg überschreitet die Ausgabegrenze; mit einer gezielten SQL-Abfrage weniger Spalten auswählen")
+        raise ParameterFehler("Einkaufsbeleg in dieser Firma nicht gefunden")
     positions = reader._page(
         "SELECT * FROM BESTELLPOSITION WHERE Firma_id=? AND Bestell_id=? "
         "ORDER BY SortNr,Nummer,_rowid", [company_id, document_id], position_limit, position_offset,
@@ -95,7 +96,7 @@ def list_articles(reader, company_id, search="", article_type=None, stock_only=F
         where.append("Lagerartikel=1")
     if group is not None:
         if not isinstance(group, str):
-            raise ValueError("warengruppe muss eine Zeichenkette sein")
+            raise ParameterFehler("warengruppe muss eine Zeichenkette sein")
         where.append("Warengruppe=?")
         bindings.append(group)
     columns = ("ArtikelNr", "Bezeichnung", "Beschreibung", "Matchcode", "EANCode", "Hersteller", "HerstellerNr", "Warengruppe")
